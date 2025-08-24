@@ -1,0 +1,295 @@
+# data_catalog.yml — canonical column maps for strategy-specific CSV exports
+# NOTE:
+# - "columns" list the intended logical headers (your custom views & main views).
+# - "aliases" lets the loader match Barchart’s CSV oddities (e.g., %Chg~, "Exp Date",
+#   truncated names with ... or tildes). Match is case-insensitive, first alias wins.
+# - Keep these IDs stable; the engine.yaml references them by id.
+
+datasets:
+  # =========================
+  # CUSTOM VIEW — LONG CALL (LEAP)
+  # =========================
+  stock_leap_custom:
+    description: Long Call Screener for LEAP (stocks) — custom view
+    strategy: long_call
+    expected_file_glob: "long-call-options-screener-long-call-leap-*.csv"
+    columns:
+      - Symbol
+      - Expiration Date
+      - DTE
+      - Strike Price
+      - Option Type
+      - Bid Price
+      - Ask Price
+      - Option Ask Price
+      - Option Last Price
+      - Percent Change
+      - Volume
+      - Moneyness
+      - Option Volume
+      - Option Open Interest
+      - IV Rank
+      - Option Volume %Change
+      - Delta
+      - Theta
+      - Gamma
+      - Vega
+      - Break Even (Ask)
+      - % To Break Even (Ask)
+      - ITM Probability
+      - Short Term Opinion Signal/Percent
+      - 52-Week High
+    aliases:
+      "Expiration Date": ["Exp Date"]
+      "Strike Price": ["Strike"]
+      "Option Type": ["Type"]
+      "Bid Price": ["Bid"]
+      "Ask Price": ["Ask"]
+      "Option Ask Price": ["Ask", "Option Ask", "Ask(a)"]
+      "Option Last Price": ["Last"]
+      "Percent Change": ["%Chg", "%Chg~"]
+      "Option Volume": ["Option Volume~", "Opt Volume", "Volume Opt"]
+      "Option Open Interest": ["Open Int", "Option Open Int", "Open Interest"]
+      "Option Volume %Change":
+        ["Opt Vol %Chg", "Option Volume %Chg", "Option Volume %Change~"]
+      "Break Even (Ask)": ["BE (Ask)"]
+      "% To Break Even (Ask)": ["%BE (Ask)", "% To BE (Ask)"]
+      "ITM Probability": ["ITM Prob"]
+      "Short Term Opinion Signal/Percent":
+        ["Short Term~", "ST Opinion", "Short Term Opinion"]
+      "52-Week High": ["52W High", "52W High~"]
+
+  # =========================
+  # CUSTOM VIEW — CSP (short put)
+  # =========================
+  stock_csp_custom:
+    description: CSP custom view (stocks) — short put screener
+    strategy: csp
+    expected_file_glob: "naked-put-option-screener-csp-*.csv"
+    columns:
+      - Symbol
+      - Ask Price
+      - Bid Price
+      - Percent Change
+      - Volume
+      - Expiration Date
+      - DTE
+      - Strike Price
+      - Option Type
+      - Moneyness
+      - Option Ask Price
+      - Option Last Price
+      - Option Volume
+      - Total Options Open Interest
+      - IV Rank
+      - Delta
+      - Theta
+      - Vega
+      - Break Even (Ask)
+      - % To Break Even (Ask)
+      - Yield To Strike%
+      - Yield To Strike Annual Rtn%
+      - ITM Probability
+      - OTM Probability
+    aliases:
+      "Ask Price": ["Ask"]
+      "Bid Price": ["Bid"]
+      "Percent Change": ["%Chg", "%Chg~"]
+      "Expiration Date": ["Exp Date"]
+      "Strike Price": ["Strike"]
+      "Option Type": ["Type"]
+      "Option Ask Price": ["Ask", "Option Ask", "Ask(a)"]
+      "Option Last Price": ["Last"]
+      "Total Options Open Interest":
+        ["Open Int", "Total Options OI", "Open Interest"]
+      "Break Even (Ask)": ["BE (Ask)"]
+      "% To Break Even (Ask)": ["%BE (Ask)", "% To BE (Ask)"]
+      "ITM Probability": ["ITM Prob"]
+      "OTM Probability": ["OTM Prob"]
+
+  # =========================
+  # CUSTOM VIEW — COVERED CALL (short call with stock)
+  # =========================
+  stock_covered_call_custom:
+    description: Covered-Call custom view (stocks) — short call with stock
+    strategy: covered_call
+    expected_file_glob: "covered-call-option-screener-call-short-stock-*.csv"
+    columns:
+      - Symbol
+      - Percent Change
+      - Volume
+      - Last
+      - Expiration Date
+      - DTE
+      - Strike Price
+      - Option Type
+      - Moneyness
+      - Option Bid Price
+      - Option Ask Price
+      - Option Midpoint
+      - Option Volume
+      - Option Open Interest
+      - IV Rank
+      - Delta
+      - Theta
+      - Break Even (Ask)
+      - % To Break Even (Ask)
+      - ITM Probability
+      - Time Premium Ask
+      - %Time Premium Ask Annual Rtn%
+      - Static Annual Return%
+      - Yield To Strike Annual Rtn%
+    aliases:
+      "Percent Change": ["%Chg", "%Chg~"]
+      "Expiration Date": ["Exp Date"]
+      "Strike Price": ["Strike"]
+      "Option Type": ["Type"]
+      "Option Bid Price": ["Bid", "Option Bid"]
+      "Option Ask Price": ["Ask", "Option Ask", "Ask(a)"]
+      "Option Midpoint": ["Mid", "Midpoint"]
+      "Option Open Interest": ["Open Int", "Open Interest"]
+      "Break Even (Ask)": ["BE (Ask)"]
+      "% To Break Even (Ask)": ["%BE (Ask)", "% To BE (Ask)"]
+      "ITM Probability": ["ITM Prob"]
+      "Time Premium Ask": ["TP Ask", "%TP Ask(a)", "Time Prem Ask"]
+      "%Time Premium Ask Annual Rtn%":
+        ["%TP Ask Ann Rtn%", "%TP Ask Ann%", "TP Ask Ann%"]
+      "Yield To Strike Annual Rtn%":
+        ["Ann Yield to Strike%", "Ann Yield To Strike%", "YtS Ann%"]
+
+  # =========================
+  # MAIN VIEW — VERTICAL BULL CALL (ETFs)
+  # =========================
+  etf_vertical_bull_call_main:
+    description: Bull Call Spread Screener (ETFs) — main view
+    strategy: vertical_bull_call
+    expected_file_glob: "bull-call-spread-option-screener-vertical-bull-call-*.csv"
+    columns:
+      - Symbol
+      - Price
+      - Expiration Date
+      - DTE
+      - Leg1 Strike
+      - Type
+      - Ask1
+      - Leg2 Strike
+      - Type2
+      - Ask2
+      - Width
+      - Net Debit
+      - Breakeven
+      - Max Profit
+      - Max Loss
+      - Max Profit%
+      - Risk/Reward
+      - IV Rank
+      - Profit Prob
+    aliases:
+      "Price": ["Price~"]
+      "Expiration Date": ["Exp Date"]
+      "Ask1": ["Ask1", "Ask 1", "Ask(Leg1)", "Ask"]
+      "Ask2": ["Ask2", "Ask 2", "Ask(Leg2)"]
+      "Type2": ["Type 2", "Leg2 Type", "Type(Leg2)"]
+      "Breakeven": ["Break Even", "BE", "BE (Net)"]
+      "Profit Prob": ["Win Prob", "Profit Probability"]
+
+  # =========================
+  # MAIN VIEW — VERTICAL BULL PUT (ETFs)
+  # =========================
+  etf_vertical_bull_put_main:
+    description: Bull Put Spread Screener (ETFs) — main view
+    strategy: vertical_bull_put
+    expected_file_glob: "bull-put-spread-option-screener-vertical-bull-put-*.csv"
+    columns:
+      - Symbol
+      - Price
+      - Expiration Date
+      - DTE
+      - Leg1 Strike
+      - Type
+      - Bid1
+      - Leg2 Strike
+      - Type2
+      - Bid2
+      - Width
+      - Net Credit
+      - Breakeven
+      - Max Profit
+      - Max Loss
+      - Max Profit%
+      - Risk/Reward
+      - IV Rank
+      - Loss Prob
+    aliases:
+      "Price": ["Price~"]
+      "Expiration Date": ["Exp Date"]
+      "Bid1": ["Bid1", "Bid 1", "Bid(Leg1)", "Bid"]
+      "Bid2": ["Bid2", "Bid 2", "Bid(Leg2)"]
+      "Type2": ["Type 2", "Leg2 Type", "Type(Leg2)"]
+      "Breakeven": ["Break Even", "BE", "BE (Net)"]
+      "Loss Prob": ["Risk Prob", "Loss Probability"]
+
+  # =========================
+  # MAIN VIEW — LONG PUT (ETFs)
+  # =========================
+  etf_long_put_main:
+    description: Long Put Screener (ETFs) — main view
+    strategy: long_put
+    expected_file_glob: "long-put-options-screener-long-put-*.csv"
+    columns:
+      - Symbol
+      - Price
+      - Expiration Date
+      - DTE
+      - Strike
+      - Type
+      - Moneyness
+      - Ask
+      - Time Premium Ask%
+      - BE (Ask)
+      - %BE (Ask)
+      - Net Debit
+      - Volume
+      - Open Int
+      - IV Rank
+      - Delta
+      - Profit Prob
+    aliases:
+      "Price": ["Price~"]
+      "Expiration Date": ["Exp Date"]
+      "BE (Ask)": ["Break Even (Ask)", "BE Ask"]
+      "%BE (Ask)": ["% To Break Even (Ask)", "%BE"]
+      "Open Int": ["Open Interest", "Option Open Interest"]
+      "Time Premium Ask%": ["%TP Ask", "%TP Ask(a)"]
+
+  # =========================
+  # MAIN VIEW — PROTECTIVE COLLAR (ETFs)
+  # =========================
+  etf_protective_collar_main:
+    description: Protective Collar Screener (ETFs) — main view
+    strategy: protective_collar
+    expected_file_glob: "protective-collar-option-screener-protective-collar-*.csv"
+    columns:
+      - Symbol
+      - DTE
+      - Leg1 Vol
+      - Leg2 Vol
+      - Leg1 OI
+      - Leg2 OI
+      - Leg1 Delta
+      - Leg2 Delta
+      - Bid1
+      - Bid2
+      - Leg1 Money
+      - Leg2 Money
+    aliases:
+      "Leg1 Vol": ["Leg1 Volume", "Leg 1 Volume", "Leg1 Vol~"]
+      "Leg2 Vol": ["Leg2 Volume", "Leg 2 Volume", "Leg2 Vol~"]
+      "Leg1 OI": ["Leg1 Open Int", "Leg 1 Open Int", "Leg1 OI~"]
+      "Leg2 OI": ["Leg2 Open Int", "Leg 2 Open Int", "Leg2 OI~"]
+      "Leg1 Delta": ["Leg 1 Delta"]
+      "Leg2 Delta": ["Leg 2 Delta"]
+      "Bid1": ["Bid 1", "Bid(Leg1)"]
+      "Bid2": ["Bid 2", "Bid(Leg2)"]
+      "Leg1 Money": ["Leg1 Money~", "Leg 1 Money"]
+      "Leg2 Money": ["Leg2 Money~", "Leg 2 Money"]

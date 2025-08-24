@@ -1,0 +1,26 @@
+{
+  "engine": "pmcc",
+  "used_policy": {
+    "leap_delta_min": 0.65,
+    "leap_min_dte": 90,
+    "short_dte_pref": [
+      28,
+      45
+    ],
+    "short_delta_band": [
+      0.15,
+      0.55
+    ],
+    "short_take_profit": 0.5,
+    "roll_at_days_to_exp": 21,
+    "roll_if_short_delta_gt": 0.55
+  },
+  "market_state": {
+    "regime": "neutral",
+    "vol": {
+      "regime": "medium"
+    }
+  },
+  "policy_source": "default",
+  "timestamp_utc": "2025-08-24 02:27:33 UTC"
+}

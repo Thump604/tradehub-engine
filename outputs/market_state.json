@@ -1,0 +1,48 @@
+{
+  "calendar_context_loaded": false,
+  "classification": {
+    "overall_regime": "bullish",
+    "trend_bias": "bullish (broad)",
+    "vol_regime": "low"
+  },
+  "indices": {
+    "MID": {
+      "high": 3267.85,
+      "last": 3261.93,
+      "low": 3180.33,
+      "open": 3180.33,
+      "pct_chg": 0.029300000000000003
+    },
+    "SMALL": {
+      "high": 1445.53,
+      "last": 1442.98,
+      "low": 1395.53,
+      "open": 1395.53,
+      "pct_chg": 0.0382
+    },
+    "SPX": {
+      "change": 105.16,
+      "high": 6478.89,
+      "last": 6475.33,
+      "low": 6384.59,
+      "open": 6384.59,
+      "pct_chg": 0.0165
+    },
+    "VIX": {
+      "change": -2.31,
+      "high": 16.83,
+      "last": 14.29,
+      "low": 14.27,
+      "open": 16.81,
+      "pct_chg": -0.1392
+    }
+  },
+  "notes": {
+    "logic": "Bullish if SPX>0 and VIX<0; Bearish if SPX<0 and VIX>0; else Neutral. Trend bias uses Mid/Small relative to SPX.",
+    "units": {
+      "pct": "decimal (0.0165 == +1.65%)"
+    }
+  },
+  "session_date": "2025-08-22",
+  "source_csv": "data/market-indices-08-22-2025 (1).csv"
+}

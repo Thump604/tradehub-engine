@@ -1,0 +1,7 @@
+.DS_Store
+__pycache__/
+*.pyc
+outputs/snapshots/*
+data/incoming/*
+data/archive/*
+.env

@@ -1,0 +1,168 @@
+# engine.yaml — minimal, production-safe config that references data_catalog.yml IDs.
+# Keep thresholds and IDs stable. Strategy scripts and batch jobs rely on these.
+
+paths:
+  # Project roots (adjust to your machine)
+  project_root: "/Users/David/Documents/Chatgtp/engine"
+  data_dir: "/Users/David/Documents/Chatgtp/engine/data"
+  outputs_dir: "/Users/David/Documents/Chatgtp/engine/outputs"
+  logs_dir: "/Users/David/Documents/Chatgtp/engine/logs"
+
+  # Shared config/state
+  calendar_file: "/Users/David/Documents/Chatgtp/engine/calendar.yaml"
+  preferences_file: "/Users/David/Documents/Chatgtp/engine/preferences.yml"
+  watchlists_file: "/Users/David/Documents/Chatgtp/engine/watchlists.yaml"
+  run_state_file: "/Users/David/Documents/Chatgtp/engine/run_state.yml"
+  market_state_file: "/Users/David/Documents/Chatgtp/engine/outputs/market_state.yml"
+
+data_catalog:
+  file: "/Users/David/Documents/Chatgtp/engine/data_catalog.yml"
+
+market:
+  # Used by market_loader.py to synthesize a daily regime signal other scripts consume
+  outputs:
+    json: "/Users/David/Documents/Chatgtp/engine/outputs/market_state.json"
+    yml: "/Users/David/Documents/Chatgtp/engine/outputs/market_state.yml"
+  # Simple mapping (used for policy hints)
+  vol_bands:
+    low_max_vix: 16
+    medium_max_vix: 24
+  trend_bias_weights:
+    spx: 0.6
+    mid: 0.2
+    sml: 0.2
+
+# ======================
+# STRATEGY DEFINITIONS
+# ======================
+strategies:
+  pmcc:
+    # Consumes LEAP long call + covered call screeners
+    inputs:
+      leap_source: stock_leap_custom
+      short_call_source: stock_covered_call_custom
+    policy:
+      leap_min_dte: 90
+      leap_min_delta: 0.65
+      short_call_dte_min: 28
+      short_call_dte_max: 45
+      short_call_delta_min: 0.15
+      short_call_delta_max: 0.55
+      roll_short_at_dte: 21
+      take_profit_short_pct: 0.50
+      coverage_guard:
+        cycles_assume: 30
+        credit_per_cycle_floor_ratio: 0.80
+    outputs:
+      tickets_dir: "/Users/David/Documents/Chatgtp/engine/outputs/pmcc_tickets"
+      suggestions_csv: "/Users/David/Documents/Chatgtp/engine/outputs/pmcc_suggestions.csv"
+
+  covered_call:
+    # Standalone covered call ideas (stock)
+    inputs:
+      source: stock_covered_call_custom
+    policy:
+      dte_min: 21
+      dte_max: 60
+      delta_band: [0.15, 0.35]
+      take_profit_pct: 0.50
+      roll_at_dte: 21
+    outputs:
+      tickets_dir: "/Users/David/Documents/Chatgtp/engine/outputs/covered_call_tickets"
+      suggestions_csv: "/Users/David/Documents/Chatgtp/engine/outputs/covered_call_suggestions.csv"
+
+  csp:
+    # Covered short put (stock) — wheel not required; managed as its own system
+    inputs:
+      source: stock_csp_custom
+    policy:
+      dte_min: 21
+      dte_max: 60
+      delta_band: [0.15, 0.35]
+      take_profit_pct: 0.50
+      roll_at_dte: 21
+    outputs:
+      tickets_dir: "/Users/David/Documents/Chatgtp/engine/outputs/csp_tickets"
+      suggestions_csv: "/Users/David/Documents/Chatgtp/engine/outputs/csp_suggestions.csv"
+
+  vertical_bull_call:
+    # Debit call spread (ETFs)
+    inputs:
+      source: etf_vertical_bull_call_main
+    policy:
+      dte_min: 21
+      # tasty-inspired heuristics
+      short_delta_band: [0.30, 0.50]
+      debit_to_width_max: 0.70
+      harvest_remain_to_max_pct: 0.25
+    outputs:
+      tickets_dir: "/Users/David/Documents/Chatgtp/engine/outputs/vertical_call_tickets"
+      suggestions_csv: "/Users/David/Documents/Chatgtp/engine/outputs/vertical_call_suggestions.csv"
+
+  vertical_bull_put:
+    # Credit put spread (ETFs)
+    inputs:
+      source: etf_vertical_bull_put_main
+    policy:
+      dte_min: 21
+      dte_max: 60
+      short_delta_band: [0.30, 0.50]
+      credit_to_width_target: 0.33 # ≈ 1/3 width
+      harvest_when_credit_kept_pct: 0.50 # manage winners
+      roll_at_dte: 21
+    outputs:
+      tickets_dir: "/Users/David/Documents/Chatgtp/engine/outputs/vertical_put_tickets"
+      suggestions_csv: "/Users/David/Documents/Chatgtp/engine/outputs/vertical_put_suggestions.csv"
+
+  long_put:
+    # Bearish hedge (ETFs) — not a primary trade for you, but catalogued
+    inputs:
+      source: etf_long_put_main
+    policy:
+      dte_min: 21
+      prefer_iv_env: "low"
+    outputs:
+      suggestions_csv: "/Users/David/Documents/Chatgtp/engine/outputs/long_put_suggestions.csv"
+
+  protective_collar:
+    # Catalogued for completeness (not enabled in your current playbook)
+    inputs:
+      source: etf_protective_collar_main
+    policy:
+      enabled: false
+    outputs:
+      suggestions_csv: "/Users/David/Documents/Chatgtp/engine/outputs/protective_collar_suggestions.csv"
+
+# ======================
+# PIPELINES / BATCHES
+# ======================
+pipelines:
+  # Daily: load market regime first (already working via market_loader.py)
+  daily_regime:
+    steps:
+      - name: market_loader
+        outputs: ["market_state.yml", "market_state.json"]
+
+  # Idea generation (read CSVs in data_dir, emit suggestions)
+  ideas:
+    steps:
+      - name: pmcc_ideas
+        uses: pmcc
+      - name: csp_ideas
+        uses: csp
+      - name: vertical_call_ideas
+        uses: vertical_bull_call
+      - name: vertical_put_ideas
+        uses: vertical_bull_put
+      # long_put / protective_collar left disabled unless you flip policy.enabled
+
+# ======================
+# RUNTIME PREFERENCES HOOK
+# ======================
+preferences:
+  # Read at runtime from preferences.yml, but defaults live here:
+  max_contracts_per_symbol: 2
+  sleeves:
+    core: 0.60
+    swing: 0.30
+    opportunistic: 0.10

@@ -1,0 +1,19 @@
+{
+  "generated_at": "2025-08-24 22:01:44Z",
+  "policy": {
+    "bull_call": {
+      "dte_min": 21,
+      "short_delta_min": 0.3,
+      "short_delta_max": 0.5,
+      "debit_max_width": 0.7
+    },
+    "bull_put": {
+      "dte_min": 21,
+      "short_delta_min": 0.3,
+      "short_delta_max": 0.5,
+      "credit_min_width": 0.33
+    }
+  },
+  "bull_call": [],
+  "bull_put": []
+}

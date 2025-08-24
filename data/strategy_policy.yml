@@ -1,0 +1,99 @@
+# configs/strategy_policy.yml
+# Central policy that maps market regime → strategy preferences, targets, and roll/exit rules.
+# Consumed by strategy engines (pmcc_monitor.py, csp_monitor.py, verticals_monitor.py).
+
+schema_version: 1
+
+defaults:
+  # Fallbacks if a regime key is missing.
+  recommend_strategies: [pmcc, csp, bull_put, bull_call]
+  targets:
+    pmcc:
+      leap_delta_min: 0.65
+      leap_min_dte: 90
+      short_dte_pref: [28, 45] # “sweet spot” window to sell
+      short_delta_band: [0.15, 0.55]
+      short_take_profit: 0.50 # 50% of short’s credit
+      roll_at_days_to_exp: 21
+      roll_if_short_delta_gt: 0.55
+    csp:
+      dte_band: [21, 60]
+      delta_band: [0.15, 0.35]
+      target_pop_min: 0.65
+      take_profit: 0.50
+      roll_at_days_to_exp: 21
+      tested_roll_out_for_credit: true
+    verticals:
+      bull_put:
+        dte_band: [21, 45]
+        short_delta_band: [0.25, 0.35]
+        credit_to_width_min: 0.33
+        take_profit_of_max: 0.50
+        roll_at_days_to_exp: 21
+      bull_call:
+        dte_band: [21, 45]
+        long_itm_bias: true
+        debit_to_width_max: 0.70
+        harvest_when_to_max_left_pct: 0.25
+
+risk:
+  sleeves:
+    max_contracts_per_ticket: 5
+    max_contracts_per_symbol: 10
+    max_risk_pct_per_symbol: 0.05 # 5% of portfolio per symbol
+  sizing:
+    pmcc_leap_notional_cap_pct: 0.15 # cap LEAP notional exposure
+    csp_collateral_cap_pct: 0.20
+
+# Regime grid.
+# Keys must match outputs/market_state.json: regime and vol.regime
+regimes:
+  bullish:
+    vol:
+      low:
+        recommend_strategies: [pmcc, bull_call, csp, bull_put]
+        adjust:
+          pmcc.short_delta_band: [0.20, 0.45] # sell a bit tighter
+          verticals.bull_call.debit_to_width_max: 0.60
+          csp.delta_band: [0.18, 0.32]
+      medium:
+        recommend_strategies: [pmcc, csp, bull_put, bull_call]
+        adjust:
+          pmcc.short_delta_band: [0.20, 0.50]
+          verticals.bull_put.credit_to_width_min: 0.33
+      high:
+        recommend_strategies: [csp, bull_put, pmcc]
+        adjust:
+          pmcc.short_delta_band: [0.25, 0.55] # sell richer
+          verticals.bull_put.credit_to_width_min: 0.40
+          csp.delta_band: [0.20, 0.35]
+
+  neutral:
+    vol:
+      low:
+        recommend_strategies: [pmcc, csp, bull_call]
+        adjust:
+          pmcc.short_dte_pref: [21, 35]
+      medium:
+        recommend_strategies: [csp, pmcc, bull_put]
+      high:
+        recommend_strategies: [csp, bull_put]
+        adjust:
+          verticals.bull_put.credit_to_width_min: 0.40
+
+  bearish:
+    vol:
+      low:
+        recommend_strategies: [pmcc] # smaller size; hedge aware
+        adjust:
+          pmcc.short_delta_band: [0.15, 0.35]
+      medium:
+        recommend_strategies: [csp (farther OTM), bull_put (conservative)]
+        adjust:
+          csp.delta_band: [0.12, 0.25]
+          verticals.bull_put.short_delta_band: [0.20, 0.30]
+      high:
+        recommend_strategies: [csp (very far OTM)]
+        adjust:
+          csp.delta_band: [0.08, 0.20]
+          csp.dte_band: [30, 60]

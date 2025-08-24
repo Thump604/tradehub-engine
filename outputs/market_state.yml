@@ -1,0 +1,39 @@
+session_date: '2025-08-22'
+source_csv: data/market-indices-08-22-2025 (1).csv
+calendar_context_loaded: false
+indices:
+  SPX:
+    last: 6475.33
+    change: 105.16
+    pct_chg: 0.0165
+    open: 6384.59
+    high: 6478.89
+    low: 6384.59
+  VIX:
+    last: 14.29
+    change: -2.31
+    pct_chg: -0.1392
+    open: 16.81
+    high: 16.83
+    low: 14.27
+  MID:
+    last: 3261.93
+    pct_chg: 0.029300000000000003
+    open: 3180.33
+    high: 3267.85
+    low: 3180.33
+  SMALL:
+    last: 1442.98
+    pct_chg: 0.0382
+    open: 1395.53
+    high: 1445.53
+    low: 1395.53
+classification:
+  vol_regime: low
+  trend_bias: bullish (broad)
+  overall_regime: bullish
+notes:
+  logic: Bullish if SPX>0 and VIX<0; Bearish if SPX<0 and VIX>0; else Neutral. Trend
+    bias uses Mid/Small relative to SPX.
+  units:
+    pct: decimal (0.0165 == +1.65%)

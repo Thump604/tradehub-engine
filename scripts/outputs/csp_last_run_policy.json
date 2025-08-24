@@ -1,0 +1,24 @@
+{
+  "engine": "csp",
+  "used_policy": {
+    "dte_band": [
+      21,
+      60
+    ],
+    "delta_band": [
+      0.15,
+      0.35
+    ],
+    "target_pop_min": 0.65,
+    "take_profit": 0.5,
+    "roll_at_days_to_exp": 21
+  },
+  "market_state": {
+    "regime": "neutral",
+    "vol": {
+      "regime": "medium"
+    }
+  },
+  "policy_source": "default",
+  "timestamp_utc": "2025-08-24 02:26:45 UTC"
+}
