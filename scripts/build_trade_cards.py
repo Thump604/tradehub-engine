@@ -1,10 +1,12 @@
 
+# scripts/build_trade_cards.py
+from __future__ import annotations
+
 # --- flatten helper (idempotent) ---
 def _as_list_of_dicts(obj):
     out = []
     def rec(x):
         if isinstance(x, dict):
-            # common container: {"items": [...]}
             if "items" in x and isinstance(x["items"], list):
                 rec(x["items"])
             else:
@@ -14,8 +16,7 @@ def _as_list_of_dicts(obj):
                 rec(el)
     rec(obj)
     return out
-# scripts/build_trade_cards.py
-from __future__ import annotations
+
 
 from typing import Any, Dict, List
 from .rank_base import WEB_FEED, read_json_items, write_json
