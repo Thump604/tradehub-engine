@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+set -euo pipefail
+patch_file="${1:-/dev/stdin}"
+
+# Ensure we’re in repo root
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+repo_root="$(cd "$script_dir/.." && pwd)"
+cd "$repo_root"
+
+# make a safety branch
+stamp=$(date +"%Y%m%d-%H%M%S")
+git rev-parse --verify HEAD >/dev/null 2>&1 && git checkout -b "apply/$stamp" || true
+
+# apply patch
+git apply --whitespace=fix "$patch_file"
+
+# show what changed
+git status --short
+git diff --stat
+
+echo
+echo "Review the changes above. If good:"
+echo "  git add -A && git commit -m 'apply patch $stamp'"
+echo
+echo "If something looks off:"
+echo "  git restore --staged . && git checkout -- .   # discard"
+echo "  git switch -                                     # go back to previous branch"
