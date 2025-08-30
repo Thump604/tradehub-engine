@@ -1,12 +1,21 @@
+# venv / python junk
 .venv/
 __pycache__/
 *.pyc
+
+# runtime logs & outputs (don’t version these)
 logs/
 outputs/
+
+# data staging
 data/incoming/
 data/processed/
 data/l1/
-data/archive/*/ 
-ata/archive/indices/
+
+# archived raw CSV snapshots (keep top-level index file if any)
+data/archive/*/
+data/archive/indices/
+
+# misc
 engine_tree*.txt
 .DS_Store
