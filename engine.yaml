@@ -3,26 +3,25 @@
 
 paths:
   # Project roots (adjust to your machine)
-  project_root: "/Users/David/Documents/Chatgtp/engine"
-  data_dir: "/Users/David/Documents/Chatgtp/engine/data"
-  outputs_dir: "/Users/David/Documents/Chatgtp/engine/outputs"
-  logs_dir: "/Users/David/Documents/Chatgtp/engine/logs"
+  project_root: "/Users/David/Documents/Chatgpt/engine"
+  data_dir: "/Users/David/Documents/Chatgpt/engine/data"
+  outputs_dir: "/Users/David/Documents/Chatgpt/engine/outputs"
+  logs_dir: "/Users/David/Documents/Chatgpt/engine/logs"
 
   # Shared config/state
-  calendar_file: "/Users/David/Documents/Chatgtp/engine/calendar.yaml"
-  preferences_file: "/Users/David/Documents/Chatgtp/engine/preferences.yml"
-  watchlists_file: "/Users/David/Documents/Chatgtp/engine/watchlists.yaml"
-  run_state_file: "/Users/David/Documents/Chatgtp/engine/run_state.yml"
-  market_state_file: "/Users/David/Documents/Chatgtp/engine/outputs/market_state.yml"
+  calendar_file: "/Users/David/Documents/Chatgpt/engine/calendar.yaml"
+  preferences_file: "/Users/David/Documents/Chatgpt/engine/preferences.yml"
+  watchlists_file: "/Users/David/Documents/Chatgpt/engine/watchlists.yaml"
+  run_state_file: "/Users/David/Documents/Chatgpt/engine/run_state.yml"
+  market_state_file: "/Users/David/Documents/Chatgpt/engine/outputs/market_state.yml"
 
 data_catalog:
-  file: "/Users/David/Documents/Chatgtp/engine/data_catalog.yml"
+  file: "/Users/David/Documents/Chatgpt/engine/data_catalog.yml"
 
-market:
   # Used by market_loader.py to synthesize a daily regime signal other scripts consume
   outputs:
-    json: "/Users/David/Documents/Chatgtp/engine/outputs/market_state.json"
-    yml: "/Users/David/Documents/Chatgtp/engine/outputs/market_state.yml"
+    json: "/Users/David/Documents/Chatgpt/engine/outputs/market_state.json"
+    yml: "/Users/David/Documents/Chatgpt/engine/outputs/market_state.yml"
   # Simple mapping (used for policy hints)
   vol_bands:
     low_max_vix: 16
@@ -54,8 +53,8 @@ strategies:
         cycles_assume: 30
         credit_per_cycle_floor_ratio: 0.80
     outputs:
-      tickets_dir: "/Users/David/Documents/Chatgtp/engine/outputs/pmcc_tickets"
-      suggestions_csv: "/Users/David/Documents/Chatgtp/engine/outputs/pmcc_suggestions.csv"
+      tickets_dir: "/Users/David/Documents/Chatgpt/engine/outputs/pmcc_tickets"
+      suggestions_csv: "/Users/David/Documents/Chatgpt/engine/outputs/pmcc_suggestions.csv"
 
   covered_call:
     # Standalone covered call ideas (stock)
@@ -68,8 +67,8 @@ strategies:
       take_profit_pct: 0.50
       roll_at_dte: 21
     outputs:
-      tickets_dir: "/Users/David/Documents/Chatgtp/engine/outputs/covered_call_tickets"
-      suggestions_csv: "/Users/David/Documents/Chatgtp/engine/outputs/covered_call_suggestions.csv"
+      tickets_dir: "/Users/David/Documents/Chatgpt/engine/outputs/covered_call_tickets"
+      suggestions_csv: "/Users/David/Documents/Chatgpt/engine/outputs/covered_call_suggestions.csv"
 
   csp:
     # Covered short put (stock) — wheel not required; managed as its own system
@@ -82,8 +81,8 @@ strategies:
       take_profit_pct: 0.50
       roll_at_dte: 21
     outputs:
-      tickets_dir: "/Users/David/Documents/Chatgtp/engine/outputs/csp_tickets"
-      suggestions_csv: "/Users/David/Documents/Chatgtp/engine/outputs/csp_suggestions.csv"
+      tickets_dir: "/Users/David/Documents/Chatgpt/engine/outputs/csp_tickets"
+      suggestions_csv: "/Users/David/Documents/Chatgpt/engine/outputs/csp_suggestions.csv"
 
   vertical_bull_call:
     # Debit call spread (ETFs)
@@ -96,8 +95,8 @@ strategies:
       debit_to_width_max: 0.70
       harvest_remain_to_max_pct: 0.25
     outputs:
-      tickets_dir: "/Users/David/Documents/Chatgtp/engine/outputs/vertical_call_tickets"
-      suggestions_csv: "/Users/David/Documents/Chatgtp/engine/outputs/vertical_call_suggestions.csv"
+      tickets_dir: "/Users/David/Documents/Chatgpt/engine/outputs/vertical_call_tickets"
+      suggestions_csv: "/Users/David/Documents/Chatgpt/engine/outputs/vertical_call_suggestions.csv"
 
   vertical_bull_put:
     # Credit put spread (ETFs)
@@ -111,8 +110,8 @@ strategies:
       harvest_when_credit_kept_pct: 0.50 # manage winners
       roll_at_dte: 21
     outputs:
-      tickets_dir: "/Users/David/Documents/Chatgtp/engine/outputs/vertical_put_tickets"
-      suggestions_csv: "/Users/David/Documents/Chatgtp/engine/outputs/vertical_put_suggestions.csv"
+      tickets_dir: "/Users/David/Documents/Chatgpt/engine/outputs/vertical_put_tickets"
+      suggestions_csv: "/Users/David/Documents/Chatgpt/engine/outputs/vertical_put_suggestions.csv"
 
   long_put:
     # Bearish hedge (ETFs) — not a primary trade for you, but catalogued
@@ -122,7 +121,7 @@ strategies:
       dte_min: 21
       prefer_iv_env: "low"
     outputs:
-      suggestions_csv: "/Users/David/Documents/Chatgtp/engine/outputs/long_put_suggestions.csv"
+      suggestions_csv: "/Users/David/Documents/Chatgpt/engine/outputs/long_put_suggestions.csv"
 
   protective_collar:
     # Catalogued for completeness (not enabled in your current playbook)
@@ -131,7 +130,7 @@ strategies:
     policy:
       enabled: false
     outputs:
-      suggestions_csv: "/Users/David/Documents/Chatgtp/engine/outputs/protective_collar_suggestions.csv"
+      suggestions_csv: "/Users/David/Documents/Chatgpt/engine/outputs/protective_collar_suggestions.csv"
 
 # ======================
 # PIPELINES / BATCHES
@@ -166,3 +165,10 @@ preferences:
     core: 0.60
     swing: 0.30
     opportunistic: 0.10
+# ======================
+# TRADE HUB CONFIG
+# ======================
+hub:
+  suggestions_dir: "./outputs"
+  freshness_min: 600
+  hide_taken_default: true

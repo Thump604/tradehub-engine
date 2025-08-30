@@ -1,0 +1,257 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+TradeHub watcher: monitors data/incoming, then runs:
+  1) scripts.ingest_latest
+  2) scripts.rank_* (all present)
+  3) scripts.make_web_site_feed
+…then tidies data/incoming and logs everything.
+
+Usage:
+  python -m scripts.watch_incoming --once
+  python -m scripts.watch_incoming --poll-secs 30
+  python -m scripts.watch_incoming --poll-secs 30 --quiet
+"""
+
+from __future__ import annotations
+import argparse
+import contextlib
+import importlib.util
+import os
+import shutil
+import subprocess
+import sys
+import time
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Iterable, List, Tuple
+
+ROOT = Path(__file__).resolve().parents[1]
+INCOMING = ROOT / "data" / "incoming"
+ARCHIVE = ROOT / "data" / "archive"
+LOGS = ROOT / "logs"
+LOG_PATH = LOGS / "watch_incoming.log"
+ERR_PATH = LOGS / "watch_incoming.err"
+
+# When a file remains in incoming after ingest, we sweep it here:
+LEFTOVERS_PREFIX = "leftovers-"
+
+# Log rotation (simple): rotate when > 5 MB
+ROTATE_BYTES = 5 * 1024 * 1024
+MAX_ROTATIONS = 3
+
+
+def now_utc() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%SZ")
+
+
+def ensure_dirs() -> None:
+    for p in (INCOMING, ARCHIVE, LOGS):
+        p.mkdir(parents=True, exist_ok=True)
+
+
+def rotate_simple(path: Path) -> None:
+    try:
+        if not path.exists() or path.stat().st_size <= ROTATE_BYTES:
+            return
+        # Shift: .2 -> .3, .1 -> .2, base -> .1
+        for i in range(MAX_ROTATIONS, 0, -1):
+            src = Path(f"{path}.{i}")
+            dst = Path(f"{path}.{i+1}")
+            if src.exists():
+                with contextlib.suppress(Exception):
+                    if i == MAX_ROTATIONS:
+                        src.unlink(missing_ok=True)
+                    else:
+                        src.rename(dst)
+        path.rename(Path(f"{path}.1"))
+    except Exception:
+        # If rotation fails, don't kill the watcher
+        pass
+
+
+class DualLogger:
+    """Minimal logger to file(s) + stderr for errors."""
+
+    def __init__(self, log_path: Path, err_path: Path, quiet: bool):
+        rotate_simple(log_path)
+        rotate_simple(err_path)
+        self.log_f = log_path.open("a", buffering=1, encoding="utf-8")
+        self.err_f = err_path.open("a", buffering=1, encoding="utf-8")
+        self.quiet = quiet
+
+    def info(self, msg: str) -> None:
+        line = f"[{now_utc()}] INFO: {msg}\n"
+        self.log_f.write(line)
+        # no stdout spam unless not quiet
+        if not self.quiet:
+            sys.stdout.write(line)
+
+    def error(self, msg: str) -> None:
+        line = f"[{now_utc()}] ERROR: {msg}\n"
+        self.err_f.write(line)
+        self.log_f.write(line)
+        # always surface errors
+        sys.stderr.write(line)
+
+    def close(self) -> None:
+        with contextlib.suppress(Exception):
+            self.log_f.flush()
+            self.log_f.close()
+        with contextlib.suppress(Exception):
+            self.err_f.flush()
+            self.err_f.close()
+
+
+def run_cmd(logger: DualLogger, parts: List[str]) -> Tuple[int, str, str]:
+    """Run a subprocess, return (rc, out, err)."""
+    try:
+        proc = subprocess.run(parts, cwd=str(ROOT), capture_output=True, text=True)
+        out = proc.stdout or ""
+        err = proc.stderr or ""
+        if proc.returncode == 0:
+            logger.info(f"✓ {' '.join(parts)} ok")
+        else:
+            logger.error(f"✗ {' '.join(parts)} rc={proc.returncode}")
+            if out.strip():
+                logger.error(f"stdout:\n{out}")
+            if err.strip():
+                logger.error(f"stderr:\n{err}")
+        return proc.returncode, out, err
+    except FileNotFoundError as e:
+        logger.error(f"FileNotFoundError running {' '.join(parts)}: {e}")
+        return 127, "", str(e)
+    except Exception as e:
+        logger.error(f"Exception running {' '.join(parts)}: {e}")
+        return 1, "", str(e)
+
+
+def python_mod(*mod_parts: str) -> List[str]:
+    """Return a `python -m package.module` command list using venv python."""
+    return [sys.executable, "-m", ".".join(mod_parts)]
+
+
+def any_files(p: Path) -> bool:
+    return any(p.iterdir())
+
+
+def detect_rankers() -> List[str]:
+    """Return list of ranker module suffixes that exist under scripts/."""
+    candidates = [
+        "rank_csp",
+        "rank_covered_call",
+        "rank_pmcc",
+        "rank_verticals",
+        "rank_diagonal",
+        "rank_iron_condor",
+        # Detect optional ones; only run if present:
+        "rank_long_call",
+        "rank_short_call",
+    ]
+    found = []
+    for name in candidates:
+        path = ROOT / "scripts" / f"{name}.py"
+        if path.exists():
+            found.append(name)
+    return found
+
+
+def archive_leftovers(logger: DualLogger) -> None:
+    """Move any lingering files in incoming/ into a timestamped archive folder."""
+    leftovers = [p for p in INCOMING.iterdir() if p.is_file()]
+    if not leftovers:
+        return
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    dest = ARCHIVE / f"{LEFTOVERS_PREFIX}{stamp}"
+    dest.mkdir(parents=True, exist_ok=True)
+    for p in leftovers:
+        try:
+            p.rename(dest / p.name)
+        except Exception as e:
+            logger.error(f"Failed to move leftover {p.name}: {e}")
+    logger.info(f"archived {len(leftovers)} leftover file(s) → {dest}")
+
+
+def cycle_once(logger: DualLogger) -> bool:
+    """Run one full cycle. Returns True if rankers ran, else False."""
+    # Always try ingest
+    logger.info(f"→ ingest: {sys.executable} -m scripts.ingest_latest")
+    rc, out, err = run_cmd(logger, python_mod("scripts", "ingest_latest"))
+    if rc != 0:
+        logger.error("ingest failed; skipping rankers this cycle")
+        return False
+
+    # If ingest succeeded, sweep any stragglers in incoming
+    with contextlib.suppress(Exception):
+        archive_leftovers(logger)
+
+    # Rankers (only run those that exist)
+    ran_any = False
+    for mod in detect_rankers():
+        logger.info(f"→ rank:{mod}: {sys.executable} -m scripts.{mod}")
+        rc, _, _ = run_cmd(logger, python_mod("scripts", mod))
+        if rc == 0:
+            ran_any = True
+
+    # Web feed
+    logger.info(f"→ web_feed: {sys.executable} -m scripts.make_web_site_feed")
+    rc, _, _ = run_cmd(logger, python_mod("scripts", "make_web_site_feed"))
+    if rc != 0:
+        logger.error("web feed generation failed")
+
+    return ran_any
+
+
+def snapshot_dir_state(path: Path) -> dict:
+    """Simple snapshot of filenames + sizes to detect changes."""
+    snap = {}
+    for p in sorted(path.iterdir()):
+        if p.is_file():
+            try:
+                snap[p.name] = p.stat().st_mtime_ns
+            except Exception:
+                snap[p.name] = 0
+    return snap
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="TradeHub watcher")
+    parser.add_argument("--once", action="store_true", help="run one cycle and exit")
+    parser.add_argument(
+        "--poll-secs", type=int, default=30, help="poll interval when not --once"
+    )
+    parser.add_argument(
+        "--quiet",
+        action="store_true",
+        help="less stdout noise; file logs still written",
+    )
+    args = parser.parse_args()
+
+    ensure_dirs()
+    logger = DualLogger(LOG_PATH, ERR_PATH, quiet=args.quiet)
+    try:
+        if args.once:
+            logger.info(f"watch_incoming one-shot — monitoring {INCOMING}")
+            cycle_once(logger)
+            return
+
+        logger.info(
+            f"watch_incoming started — monitoring {INCOMING} every {args.poll_secs}s"
+        )
+        prev = snapshot_dir_state(INCOMING)
+        while True:
+            time.sleep(args.poll_secs)
+            cur = snapshot_dir_state(INCOMING)
+            if cur != prev or not any_files(ROOT / "outputs"):  # bootstrap or new files
+                logger.info("change detected → ingest + rank + feed")
+                cycle_once(logger)
+                prev = cur
+            else:
+                # keep a breadcrumb so you know the agent is alive
+                logger.info(f"heartbeat (no change) — {len(cur)} file(s) in incoming")
+    finally:
+        logger.close()
+
+
+if __name__ == "__main__":
+    main()

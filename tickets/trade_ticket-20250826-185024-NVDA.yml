@@ -1,0 +1,12 @@
+type: trade_ticket
+id: trade_ticket-20250826-185024-NVDA
+timestamp: '2025-08-26 18:50:24Z'
+symbol: NVDA
+strategy: pmcc
+action: review
+why: ''
+exp: '?'
+strike: '-'
+source: web_hub
+notes: []
+status: cancelled

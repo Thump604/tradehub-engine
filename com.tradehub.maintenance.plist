@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+ "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>com.tradehub.maintenance</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/David/Documents/Chatgpt/engine/.venv/bin/python</string>
+    <string>-m</string>
+    <string>scripts.maintain_housekeeping</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>/Users/David/Documents/Chatgpt/engine</string>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <!-- Optional tuning -->
+    <key>LOG_MAX_MB</key><string>5</string>
+    <key>LOG_KEEP_DAYS</key><string>14</string>
+    <key>ARCHIVE_KEEP_DAYS</key><string>14</string>
+    <key>TICKETS_KEEP_DAYS</key><string>30</string>
+    <key>SNAPSHOT_KEEP_DAYS</key><string>14</string>
+    <key>PYTHONPATH</key><string>/Users/David/Documents/Chatgpt/engine</string>
+  </dict>
+
+  <key>StandardOutPath</key>
+  <string>/Users/David/Documents/Chatgpt/engine/logs/maintenance.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/David/Documents/Chatgpt/engine/logs/maintenance.err</string>
+
+  <key>RunAtLoad</key><true/>
+
+  <!-- 03:15 local time daily -->
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Hour</key><integer>3</integer>
+    <key>Minute</key><integer>15</integer>
+  </dict>
+</dict></plist>

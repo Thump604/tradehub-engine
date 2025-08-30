@@ -1,10 +1,9 @@
-generated_at: '2025-08-24 18:30:41Z'
-datasets:
-  vertical_bull_call:
-    file: /Users/David/Documents/Chatgpt/engine/data/vertical_bull_call-latest.csv
-    sourced_from: /Users/David/Documents/Chatgpt/engine/data/archive/20250824-183041/bull-call-spread-option-screener-vertical-bull-call-etf-08-24-2025.csv
-    updated_at: '2025-08-24T18:30:41Z'
-  vertical_bull_put:
-    file: /Users/David/Documents/Chatgpt/engine/data/vertical_bull_put-latest.csv
-    sourced_from: /Users/David/Documents/Chatgpt/engine/data/archive/20250824-183041/bull-put-spread-option-screener-vertical-bull-put-etf-08-24-2025.csv
-    updated_at: '2025-08-24T18:30:41Z'
+staged:
+  covered_call: covered_call-latest.csv
+  csp: csp-latest.csv
+  vertical_bull_put: vertical_bull_put-latest.csv
+  leap: leap-latest.csv
+  long_call: long_call-latest.csv
+  short_call: short_call-latest.csv
+  market: market-indices-latest.csv
+generated: '2025-08-29 20:50:28'

@@ -1,0 +1,24 @@
+policies:
+  long_call_diagonal:
+    long:
+      itm_pct_range: [0.0, 10.0]
+      dte_range: [120, 300]
+    short:
+      otm_pct_range: [6.0, 22.0]
+      dte_range: [18, 60]
+    coverage:
+      credit_per_30_min_ratio: 0.25
+    targets:
+      long_itm_star: 5.0
+      long_dte_star: 210
+      short_otm_star: 14.0
+      short_dte_star: 35
+
+  iron_condor:
+    dte_range: [30, 55]
+    risk_reward_range: [1.1, 1.6]
+    loss_prob_max: 60.0
+    targets:
+      dte: 42
+      risk_reward: 1.3
+      ivr_min: 15.0

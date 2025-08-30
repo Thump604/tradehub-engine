@@ -1,0 +1,4 @@
+Symbol,"Exp Date",DTE,Strike,Type,Bid,Ask,Ask,Last,%Chg~,Volume~,Moneyness,Volume,"Open Int","IV Rank","Vol %Chg",Delta,Theta,Gamma,Vega,"BE (Ask)","%BE (Ask)","ITM Prob","Short Term~","52W High~"
+NVDA,2026-06-18,295,136.00,Call,181.27,181.28,57.7,57.45,+0.04%,59190722,+24.54%,31,4063,30.36%,+121.43%,0.836182,-0.04184,0.003287,0.402287,193.7,7.47%,75.16%,"100% Buy",184.48
+NVDA,2026-09-18,387,140.00,Call,181.27,181.28,58.2,57.9,+0.04%,59190722,+22.32%,57,14235,30.36%,+159.09%,0.810123,-0.038649,0.003241,0.50581,198.2,9.97%,70.80%,"100% Buy",184.48
+"Downloaded from Barchart.com as of 08-27-2025 09:53am CDT"

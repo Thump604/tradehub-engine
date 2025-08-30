@@ -1,48 +1,54 @@
 {
-  "calendar_context_loaded": false,
-  "classification": {
-    "overall_regime": "bullish",
-    "trend_bias": "bullish (broad)",
-    "vol_regime": "low"
-  },
+  "generated_at": "2025-08-27T16:00:00-05:00",
+  "headline": "Indices firmer; Energy leads; VIX up on green",
+  "regime": "Neutral",
+  "trend": "Up",
+  "vol": "Moderate",
+  "vol_detail": "VIX 14.85",
   "indices": {
-    "MID": {
-      "high": 3267.85,
-      "last": 3261.93,
-      "low": 3180.33,
-      "open": 3180.33,
-      "pct_chg": 0.029300000000000003
-    },
-    "SMALL": {
-      "high": 1445.53,
-      "last": 1442.98,
-      "low": 1395.53,
-      "open": 1395.53,
-      "pct_chg": 0.0382
-    },
-    "SPX": {
-      "change": 105.16,
-      "high": 6478.89,
-      "last": 6475.33,
-      "low": 6384.59,
-      "open": 6384.59,
-      "pct_chg": 0.0165
+    "S&P 500": 0.24,
+    "Dow Jones Industrial": 0.32,
+    "Nasdaq 100": 0.17
+  },
+  "sectors": {
+    "Financials": 0.18,
+    "Health Care": -0.03,
+    "Energy": 1.15,
+    "Information Technology": 0.48,
+    "Communication Services": -0.09,
+    "Consumer Discretionary": 0.05,
+    "Consumer Staples": 0.22,
+    "Industrials": -0.02,
+    "Materials": 0.19,
+    "Real Estate": 0.43,
+    "Utilities": 0.06
+  },
+  "specials": {
+    "Semiconductors": {
+      "last": 5824.61,
+      "pct": 0.29
     },
     "VIX": {
-      "change": -2.31,
-      "high": 16.83,
-      "last": 14.29,
-      "low": 14.27,
-      "open": 16.81,
-      "pct_chg": -0.1392
+      "last": 14.85,
+      "pct": 1.57
+    },
+    "VXN": {
+      "last": 18.69,
+      "pct": 2.75
+    },
+    "S&P GSCI": {
+      "last": 546.21,
+      "pct": 0.57
+    },
+    "DJ Commodity": {
+      "last": 1057.96,
+      "pct": 0.29
+    },
+    "US Dollar Index": {
+      "last": 98.2,
+      "pct": -0.02
     }
   },
-  "notes": {
-    "logic": "Bullish if SPX>0 and VIX<0; Bearish if SPX<0 and VIX>0; else Neutral. Trend bias uses Mid/Small relative to SPX.",
-    "units": {
-      "pct": "decimal (0.0165 == +1.65%)"
-    }
-  },
-  "session_date": "2025-08-22",
-  "source_csv": "data/market-indices-08-22-2025 (1).csv"
+  "summary_text": "SPX +0.24%, NDX +0.17%, DJI +0.32%. Sector breadth: 8 up / 3 down. Leaders: Energy (+1.15%), Information Technology (+0.48%). Laggards: Communication Services (-0.09%), Health Care (-0.03%). Semis (SOX) +0.29% \u2014 a proxy for AI/mega-cap risk. Vol regime: Moderate (VIX 14.85, +1.57%). Nasdaq vol (VXN 18.69, +2.75%). US Dollar (DXY) -0.02% \u2014 watch for macro crosswinds. Commodities (GSCI) +0.57%. Unusual: volatility up while indices green \u2192 hedging demand into catalysts.",
+  "source_file": "/Users/David/Documents/Chatgpt/engine/data/archive/20250827-160258/market-indices-08-27-2025.csv"
 }

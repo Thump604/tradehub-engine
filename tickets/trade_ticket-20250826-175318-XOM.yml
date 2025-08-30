@@ -1,0 +1,12 @@
+type: trade_ticket
+id: trade_ticket-20250826-175318-XOM
+timestamp: '2025-08-26 17:53:18Z'
+symbol: XOM
+strategy: pmcc
+action: review
+why: ''
+exp: '?'
+strike: '-'
+source: web_hub
+notes: []
+status: cancelled

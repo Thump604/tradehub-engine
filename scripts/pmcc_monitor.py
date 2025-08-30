@@ -1,347 +1,365 @@
 #!/usr/bin/env python3
-# pmcc_monitor.py — PMCC monitor (LEAP long call + short near-dated call).
-# CLI:
-#   --fill SYMBOL=PRICE (repeatable)  → entry credit for the SHORT CALL
-#   --gtc "50,75"                     → tiered GTC %s (always used)
-#
-# Tiering rules:
-#   - if any --fill present and no --gtc given → tiers = [50, 75]
-#   - if no --fill and no --gtc → tiers = [50] (estimate off current mark)
+"""
+pmcc_monitor.py — environment + pairing snapshot for PMCC
 
-import sys, re, argparse, os
-from dataclasses import dataclass
+What it does
+------------
+1) Loads LEAP (long call) and Covered Call (short call) CSVs via the unified loader.
+2) Strips any trailing footers.
+3) Checks headers against the authoritative "custom view" schemas (non-fatal).
+4) Prints dataset counts and overlap symbols.
+5) For each overlap symbol, attempts to form a PMCC *candidate pairing*:
+   - Long leg: a Call from LEAP sheet, prioritize delta in [0.60, 0.85], largest DTE
+   - Short leg: a Call from Covered Call sheet, DTE in [30, 60], delta in [0.20, 0.40]
+6) Computes a few helpful fields: long extrinsic, coverage ratio, and emits a compact table.
+7) If a symbol cannot produce a pair, prints a reason.
+
+Usage
+-----
+    python -m scripts.pmcc_monitor
+"""
+
+from __future__ import annotations
+import sys
 from datetime import datetime, timezone
-from math import floor
+from pathlib import Path
+from typing import Any, Dict, List, Tuple, Optional
 
-# ---------- ANSI ----------
-class C:
-    R="\033[31m"; G="\033[32m"; Y="\033[33m"; B="\033[34m"; M="\033[35m"; Cc="\033[36m"
-    DIM="\033[2m"; RESET="\033[0m"; BOLD="\033[1m"
-def color(s, k): return f"{k}{s}{C.RESET}"
-def green(s): return color(s, C.G)
-def yellow(s): return color(s, C.Y)
-def red(s): return color(s, C.R)
-def bold(s): return color(s, C.BOLD)
-def dim(s): return color(s, C.DIM)
+# Internal modules (unified loader & yaml)
+from scripts.utils.data_loader import (
+    get_dataset_path,
+    load_barchart_csv,
+    strip_footer_if_present,
+)
+from scripts.utils.yaml_utils import read_yaml_safe
 
-# ---------- fmt ----------
-def fmt_money(x, none="N/A"): return none if x is None else f"${x:,.2f}"
-def fmt_num(x, none="N/A"): return none if x is None else f"{x:.3f}"
-def fmt_int(x, none="N/A"): return none if x is None else f"{int(x)}"
-def fmt_pct(x, none="N/A"): return none if x is None else f"{x*100:.2f}%"
+ROOT = Path(__file__).resolve().parents[1]
+DATA = ROOT / "data"
+RUNTIME_CATALOG = DATA / "data_catalog_runtime.yml"
 
-def to_float(s):
-    if s is None: return None
-    s = s.replace(',', '')
-    try: return float(s)
-    except: return None
+# Authoritative "Custom View" schemas (you said these are locked)
+LEAP_EXPECTED = [
+    "Symbol", "Price~", "Exp Date", "DTE", "Strike", "Type",
+    "Moneyness", "Ask", "%TP Ask", "BE (Ask)", "%BE (Ask)",
+    "Net Debit", "Volume", "Open Int", "IV Rank", "Delta", "Profit Prob"
+]
 
-def to_int(s):
-    if s is None: return None
-    s = s.replace(',', '')
-    try: return int(s)
-    except: return None
+COVERED_CALL_EXPECTED = [
+    "Symbol", "Price~", "Exp Date", "DTE", "Strike", "Type",
+    "Moneyness", "Bid", "BE (Bid)", "%BE (Bid)", "Volume",
+    "Open Int", "IV Rank", "Delta", "Return", "Ann Rtn",
+    "Ptnl Rtn", "Profit Prob"
+]
 
-# ---------- models ----------
-@dataclass
-class Underlying:
-    symbol: str
-    last: float = None
+# Pairing heuristics (these don’t block data; they just drive the monitor output)
+LONG_DELTA_MIN = 0.60
+LONG_DELTA_MAX = 0.85
+SHORT_DTE_MIN  = 30
+SHORT_DTE_MAX  = 60
+SHORT_DELTA_MIN = 0.20
+SHORT_DELTA_MAX = 0.40
+TOP_PER_SYMBOL = 2          # how many short candidates to show per long pick
+TOP_SYMBOLS    = 12         # overall symbols to display in the pairing section
 
-@dataclass
-class OptionRow:
-    symbol: str
-    exp: str
-    strike: float
-    cp: str            # 'C'/'P'
-    dte: int = None
-    delta: float = None
-    oi: int = None
-    qty: int = None    # -1 short, +1 long
-    mark: float = None
-    itm_flag: str = None
-    raw: str = ""
 
-# ---------- regex ----------
-DATE_RE   = re.compile(r'(\d{2}/\d{2}/\d{4})')
-HEADER_RE = re.compile(r'^([A-Z][A-Z0-9\.]{0,6})\s+(\d{2}/\d{2}/\d{4})\s+(\d+(?:\.\d+)?)\s+(C|P)\b')
-MONEY_RE  = re.compile(r'\$(-?\d+(?:\.\d+)?)')
-ITM_RE    = re.compile(r'\b(ITM|OTM)\b')
-
-def _norm(s: str) -> str: return s.replace('\t', ' ').strip()
-
-# ---------- market context ----------
-def load_market_state(path):
-    if not path or not os.path.exists(path): return None
+# --------------------------
+# Helpers for safe extraction
+# --------------------------
+def f(x: Any) -> Optional[float]:
+    """Convert a clean-format numeric string (maybe with %, ~, commas) to float; None if blank."""
+    if x is None:
+        return None
+    s = str(x).strip()
+    if s == "" or s.lower() == "na":
+        return None
+    # Remove common adornments without changing numeric meaning
+    for ch in [",", "%"]:
+        s = s.replace(ch, "")
+    # Some sheets mark prices with a trailing "~"
+    s = s.replace("~", "")
     try:
-        import yaml
-        with open(path, 'r') as f:
-            y = yaml.safe_load(f) or {}
-        return y
-    except Exception:
+        return float(s)
+    except ValueError:
         return None
 
-def print_market_banner(state):
-    if not state:
-        print("REGIME N/A | TREND N/A | VOL N/A")
-        print("─"*74)
-        print(bold("MARKET CONTEXT"))
-        print("─"*74)
-        return
-    regime = state.get("overall_regime", "N/A")
-    trend  = state.get("trend_bias", "N/A")
-    vol    = state.get("volatility", "N/A")
-    line = f"REGIME {regime} | TREND {trend} | VOL {vol}"
-    print(line)
-    print("─"*74)
-    print(bold("MARKET CONTEXT"))
-    print("─"*74)
 
-# ---------- input ----------
-def read_lines():
-    print("────────────── PMCC MONITOR — Paste PMCC position rows. ──────────────")
-    print("Include: (1) underlying line, (2) LEAP call header (e.g., 'AAPL 01/16/2026 185.00 C'),")
-    print("         (3) first price/data line; and (4) short call header & its first price/data line.")
-    print("Then press Ctrl-D (Linux/Mac) or Ctrl-Z + Enter (Windows).")
-    raw = sys.stdin.read()
-    return [_norm(l) for l in raw.splitlines() if _norm(l)]
+def i(x: Any) -> Optional[int]:
+    """To int via f()."""
+    val = f(x)
+    return int(val) if val is not None else None
 
-# ---------- underlyings ----------
-def detect_underlyings(lines):
-    under = {}
-    sym = None
-    for line in lines:
-        if re.fullmatch(r'[A-Z][A-Z0-9\.]{0,6}', line):
-            sym = line; continue
-        if sym and line.startswith('$'):
-            m = MONEY_RE.match(line)
-            if m:
-                last = to_float(m.group(1))
-                under[sym] = Underlying(sym, last)
-            sym = None
-    return under
 
-# ---------- parse helpers ----------
-def token_split(row: str):
-    row = row.replace('+', ' +').replace('-', ' -')
-    return [t for t in row.split() if t]
+def pct_str(val: Optional[float]) -> str:
+    return f"{val:.2f}%" if isinstance(val, (int, float)) else ""
 
-def parse_after_itm_block(row: str):
-    m = ITM_RE.search(row)
-    if not m: return None, None, None, None, None
-    itm = m.group(1)
-    toks = token_split(row)
-    idx = None
-    for i,t in enumerate(toks):
-        if t == itm: idx = i; break
-    if idx is None: return itm, None, None, None, None
-    def get(i): return toks[i].replace(',', '') if 0 <= i < len(toks) else None
-    dte = to_int(get(idx+1))
-    delta = to_float(get(idx+2))
-    oi = to_int(get(idx+3))
-    qty = to_int(get(idx+4))
-    if qty not in (-1,1):
-        q2 = to_int(get(idx+5))
-        if q2 in (-1,1): qty = q2
-    return itm, dte, delta, oi, qty
 
-def parse_options(lines):
-    opts = []
-    n = len(lines); i = 0
-    while i < n:
-        h = HEADER_RE.match(lines[i])
-        if not h: i += 1; continue
-        sym, date, strike_s, cp = h.group(1), h.group(2), h.group(3), h.group(4)
-        strike = float(strike_s)
-        data_row = None
-        j = i+1
-        while j < n and j <= i+8:
-            row = lines[j]
-            if ' EXP ' in f" {row} " or row.upper().startswith('CALL ') or row.upper().startswith('PUT '):
-                j += 1; continue
-            if row.startswith('$'):
-                data_row = row; break
-            j += 1
-        if not data_row:
-            i += 1; continue
-        m = MONEY_RE.search(data_row)
-        mark = to_float(m.group(1)) if m else None
-        itm_flag, dte, delta, oi, qty = parse_after_itm_block(data_row)
-        opt = OptionRow(sym, date, strike, cp, dte, delta, oi, qty, mark, itm_flag, data_row)
-        opts.append(opt)
-        i = j+1
-    return opts
+def money(val: Optional[float]) -> str:
+    return f"{val:.2f}" if isinstance(val, (int, float)) else ""
 
-# ---------- PMCC logic ----------
-def is_long_leap_call(o: OptionRow, last: float) -> bool:
-    if o.cp != 'C' or o.qty is None or o.qty <= 0 or o.dte is None: return False
-    itm_ok = (o.itm_flag == 'ITM') or (last is not None and last > o.strike)
-    return itm_ok and o.dte >= 90 and (o.delta is None or o.delta >= 0.65)
 
-def is_short_near_call(o: OptionRow, last: float) -> bool:
-    if o.cp != 'C' or o.qty is None or o.qty >= 0 or o.dte is None: return False
-    otm_ok = (o.itm_flag == 'OTM') or (last is not None and last < o.strike)
-    return otm_ok and 7 <= o.dte <= 60 and (o.delta is None or 0.15 <= abs(o.delta) <= 0.55)
+def pick_best_long(leaps: List[Dict[str, Any]]) -> Tuple[Optional[Dict[str, Any]], str]:
+    """Choose a long call candidate from the LEAP rows (for one symbol).
+    Preference: Call, delta in [LONG_DELTA_MIN, LONG_DELTA_MAX], then max DTE; fallback otherwise."""
+    calls = [r for r in leaps if str(r.get("Type","")).lower() == "call"]
+    if not calls:
+        return None, "no long calls in LEAP sheet"
 
-def cycles_left(dte_long: int) -> int:
-    if dte_long is None: return 0
-    return max(0, floor((dte_long - 21) / 30))
+    # First, try preferred delta band
+    scored = []
+    for r in calls:
+        d = f(r.get("Delta"))
+        dte = i(r.get("DTE")) or -1
+        if d is None:
+            continue
+        if LONG_DELTA_MIN <= d <= LONG_DELTA_MAX:
+            scored.append((dte, d, r))
+    if scored:
+        scored.sort(key=lambda t: (t[0], t[1]), reverse=True)  # prefer bigger DTE, then bigger delta
+        return scored[0][2], ""
 
-def long_extrinsic(long: OptionRow, last: float) -> float:
-    if long.mark is None or last is None: return None
-    intrinsic = max(0.0, last - long.strike)
-    return max(0.0, long.mark - intrinsic)
+    # Fallback: just take highest DTE call
+    calls_with_dte = [(i(r.get("DTE")) or -1, r) for r in calls]
+    calls_with_dte.sort(key=lambda t: t[0], reverse=True)
+    return calls_with_dte[0][1], "fallback long (delta outside preferred band)"
 
-def gtc_targets(credit_basis: float, tiers):
-    if credit_basis is None: return None
-    out = []
-    for p in tiers:
-        tgt = round(max(0.05, credit_basis * (1 - p/100.0)), 2)
-        out.append((p, tgt))
-    return out
 
-def bullet_line(s, tone=""):
-    if tone == "ok": return "• " + green(s)
-    if tone == "warn": return "• " + yellow(s)
-    if tone == "risk": return "• " + red(s)
-    return "• " + s
+def short_candidates(shorts: List[Dict[str, Any]]) -> Tuple[List[Dict[str, Any]], str]:
+    """Filter short calls to our preferred trade window and deltas."""
+    calls = [r for r in shorts if str(r.get("Type","")).lower() == "call"]
+    if not calls:
+        return [], "no short calls in Covered Call sheet"
 
-def pad_pair(l_label, l_val, r_label, r_val, w=30, vw=18):
-    lv = l_val if isinstance(l_val, str) else str(l_val)
-    rv = r_val if isinstance(r_val, str) else str(r_val)
-    print(f"{l_label:<{w}} {lv:>{vw}}    {r_label:<{w}} {rv:>{vw}}")
+    filtered = []
+    why = ""
+    for r in calls:
+        dte = i(r.get("DTE"))
+        d = f(r.get("Delta"))
+        if dte is None or d is None:
+            continue
+        if SHORT_DTE_MIN <= dte <= SHORT_DTE_MAX and SHORT_DELTA_MIN <= d <= SHORT_DELTA_MAX:
+            filtered.append(r)
 
-def report(sym, und: Underlying, long: OptionRow, short: OptionRow, fills, tiers, market=None):
-    ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-    print(f"{sym}  |  PMCC TRADE TICKET")
-    print(ts)
-    print("─"*34 + "  " + "─"*34)
+    if not filtered:
+        why = "no short calls inside (DTE, delta) window"
+    # Rank shorts by bid desc, then DTE desc (more premium preferred)
+    filtered.sort(key=lambda r: (f(r.get("Bid")) or 0.0, i(r.get("DTE")) or 0), reverse=True)
+    return filtered, why
 
-    short_otm = und.last is not None and und.last < (short.strike or 0)
-    short_band = short.delta is not None and 0.15 <= abs(short.delta) <= 0.55
-    dte_sweet = short.dte is not None and 28 <= short.dte <= 45
-    badges = []
-    badges.append("[ Short OTM ]" if short_otm else "[ Short ITM/Tested ]")
-    badges.append("[ Δ in band ]" if short_band else "[ Δ out of band ]")
-    badges.append("[ DTE sweet spot ]" if dte_sweet else "[ DTE outside sweet spot ]")
-    print(" ".join(badges)); print()
 
-    # Header
-    print(f"Underlying: {fmt_money(und.last)}")
-    print(f"LEAP (long): {long.strike:.3f} C  • Exp {long.exp}  • DTE {long.dte}  • Δ {fmt_num(long.delta)}  • Mark {fmt_money(long.mark)}")
-    print(f"Short (covered): {short.strike:.3f} C  • Exp {short.exp}  • DTE {short.dte}  • Δ {fmt_num(short.delta)}  • Mark {fmt_money(short.mark)}")
-    print()
+def long_extrinsic(long_row: Dict[str, Any]) -> Optional[float]:
+    """For a call: extrinsic = Ask - max(0, Underlying - Strike)."""
+    ask = f(long_row.get("Ask"))
+    und = f(long_row.get("Price~"))
+    strike = f(long_row.get("Strike"))
+    if ask is None or und is None or strike is None:
+        return None
+    intrinsic = max(0.0, und - strike)
+    return ask - intrinsic
 
-    # Policy
-    print("Policy")
-    print("Policy → Δ band 0.15–0.55 • short DTE 28–45 • TP 50% • roll@21d • roll if Δ>0.55")
-    print()
 
-    # First Check
-    print("First Check")
-    print(f"  LEAP ITM:                  {'PASS' if und.last and long.strike and und.last>long.strike else 'FAIL'}")
-    print(f"  LEAP DTE ≥ 90:             {'PASS' if (long.dte or 0) >= 90 else 'FAIL'}")
-    print(f"  LEAP Δ ≥ 0.65:             {'PASS' if (long.delta or 0) >= 0.65 else 'FAIL'}")
-    print(f"  Short OTM:                 {'PASS' if short_otm else 'FAIL'}")
-    print(f"  Short DTE in [7,60]:       {'PASS' if (short.dte or 0) >=7 and (short.dte or 0) <=60 else 'FAIL'}")
-    print(f"  Short Δ in 0.15–0.55:      {'PASS' if short_band else 'FAIL'}")
-    print()
+def coverage_ratio(long_row: Dict[str, Any], short_row: Dict[str, Any]) -> Optional[float]:
+    """Short premium / long extrinsic. Larger is better for PMCC roll cadence."""
+    ex = long_extrinsic(long_row)
+    bid = f(short_row.get("Bid"))
+    if ex is None or ex <= 0 or bid is None:
+        return None
+    return bid / ex
 
-    # Deep analysis
-    extr = long_extrinsic(long, und.last)
-    cyc  = cycles_left(long.dte)
-    required = extr / cyc if (extr is not None and cyc>0) else None
-    coverage = None
-    if required is not None and short.mark is not None:
-        coverage = "OK" if short.mark >= 0.8*required else "MARGINAL"
-    pad_pair("LEAP extrinsic:", fmt_money(extr), "Short credit (mark):", fmt_money(short.mark))
-    pad_pair("Cycles left (≈30D):", str(cyc), "Short 50% GTC:", fmt_money(round((short.mark or 0)*0.5,2)))
-    pad_pair("Required / 30D:", fmt_money(required), "Coverage status:", coverage or "N/A")
-    reg = f"REGIME {market.get('overall_regime','N/A')} | TREND {market.get('trend_bias','N/A')} | VOL {market.get('volatility','N/A')}" if market else "N/A"
-    pad_pair("Net Δ (long+short):", fmt_num((long.delta or 0)+(short.delta or 0)), "Market regime:", reg)
-    print()
 
-    # Playbook
-    print("Playbook — What, Why, When, How")
-    if short_otm:  print(bullet_line("Short is OTM → time decay works for you; assignment risk lower.", "ok"))
-    else:          print(bullet_line("Short is tested/ITM → roll up/out to reduce risk or manage assignment.", "risk"))
-    if short_band: print(bullet_line("Short Δ in band → balance between POP and credit is healthy.", "ok"))
-    else:          print(bullet_line("Short Δ out of band → rethink strike or DTE for better probabilities.", "warn"))
-    if dte_sweet:  print(bullet_line("Short DTE ~28–45 → sweet spot for theta vs. gamma risk.", "ok"))
-    print()
+def reason_no_pair(symbol: str, leaps: List[Dict[str, Any]], shorts: List[Dict[str, Any]]) -> str:
+    """Explain why we couldn't assemble a pair for a symbol."""
+    if not leaps:
+        return "no LEAP rows for symbol"
+    if not shorts:
+        return "no Covered Call rows for symbol"
+    # Check for calls at all
+    has_long_call = any(str(r.get("Type","")).lower()=="call" for r in leaps)
+    has_short_call = any(str(r.get("Type","")).lower()=="call" for r in shorts)
+    if not has_long_call:
+        return "LEAP: no call entries"
+    if not has_short_call:
+        return "Covered Call: no call entries"
 
-    # GTC targets (short call)
-    fill = fills.get(sym) if fills else None
-    basis = fill if fill is not None else short.mark
-    label = "GTC targets (from fill)" if fill is not None else "GTC targets (est., no fill)"
-    targets = gtc_targets(basis, tiers)
-    if targets:
-        parts = [f"{int(p)}%→{fmt_money(t)}" for p,t in targets]
-        print(label + ": " + ", ".join(parts))
-    print()
+    # Window/delta checks
+    _, why_s = short_candidates(shorts)
+    if why_s:
+        return why_s
 
-    print("Recommendations")
-    if not short_otm:
-        print("• Short tested: consider roll up/out for credit; watch Δ>0.55.")
+    # If we get here, shorts exist within window; maybe long is missing delta or price fields
+    cand, why_l = pick_best_long(leaps)
+    if cand is None:
+        return "LEAP: failed to pick a long"
+    ex = long_extrinsic(cand)
+    if ex is None or ex <= 0:
+        return "LEAP: missing ask/underlying/strike (or extrinsic <= 0)"
+
+    return "unknown pairing failure"
+
+
+def print_header_check(rows: List[Dict[str, Any]], expected: List[str], label: str) -> None:
+    print(f"{label:<22}", end="")
+    if rows:
+        header = list(rows[0].keys())
+        print(f"header={header}")
+        if header != expected:
+            print(f"[WARN] {label.strip()} differs from expected schema.")
     else:
-        print("• Hold. Keep tiered GTC working on short.")
-    print("─"*70)
+        print("rows = 0")
 
-# ---------- args ----------
-def parse_args():
-    ap = argparse.ArgumentParser(description="PMCC monitor")
-    ap.add_argument("--state", help="outputs/market_state.yml for banner", default=None)
-    ap.add_argument("--fill", action="append", help="Override SHORT CALL fill credit, SYMBOL=PRICE (repeatable)", default=[])
-    ap.add_argument("--gtc", default=None, help="Comma list of GTC tiers, e.g., '50,75'")
-    return ap.parse_args()
 
-def main():
-    args = parse_args()
-    market = load_market_state(args.state)
-    print_market_banner(market)
-    lines = read_lines()
-    under = detect_underlyings(lines)
-    opts = parse_options(lines)
+def now_utc() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%SZ")
 
-    # group by symbol
-    by = {}
-    for o in opts:
-        by.setdefault(o.symbol, []).append(o)
 
-    # fills dict
-    fills = {}
-    for item in args.fill:
-        if '=' in item:
-            sym, val = item.split('=',1)
-            fills[sym.strip().upper()] = to_float(val.strip())
+def main() -> int:
+    print("\n══════════════════════════════════════════════")
+    print("PMCC MONITOR — environment + pairing snapshot")
+    print("══════════════════════════════════════════════")
 
-    # tiers
-    tiers = []
-    if args.gtc:
-        for t in args.gtc.split(','):
-            t = t.strip()
-            if t:
-                try: tiers.append(float(t))
-                except: pass
+    runtime = read_yaml_safe(RUNTIME_CATALOG) if RUNTIME_CATALOG.exists() else {}
+    if not runtime:
+        print(f"[WARN] Runtime catalog missing or empty: {RUNTIME_CATALOG}")
+
+    leap_path = get_dataset_path("leap", runtime=runtime, fallback=DATA / "leap-latest.csv")
+    cc_path   = get_dataset_path("covered_call", runtime=runtime, fallback=DATA / "covered_call-latest.csv")
+
+    print("\n──────────────── FILES ─────────────────")
+    print(f"LEAP file         → {leap_path}")
+    print(f"Covered Call file → {cc_path}")
+
+    try:
+        leap_rows = strip_footer_if_present(load_barchart_csv(leap_path))
+    except FileNotFoundError:
+        leap_rows = []
+        print("[ERROR] LEAP CSV not found.")
+
+    try:
+        cc_rows = strip_footer_if_present(load_barchart_csv(cc_path))
+    except FileNotFoundError:
+        cc_rows = []
+        print("[ERROR] Covered Call CSV not found.")
+
+    print("\n──────────────── HEADERS ────────────────")
+    print_header_check(leap_rows, LEAP_EXPECTED, "LEAP:")
+    print_header_check(cc_rows,   COVERED_CALL_EXPECTED, "Covered Call:")
+
+    print("\n──────────────── COUNTS ─────────────────")
+    print(f"LEAP rows         : {len(leap_rows)}")
+    print(f"Covered Call rows : {len(cc_rows)}")
+
+    # -----------------------------
+    # Overlap + simple pair building
+    # -----------------------------
+    # index by symbol
+    from collections import defaultdict
+    leaps_by_sym: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
+    shorts_by_sym: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
+
+    for r in leap_rows:
+        sym = str(r.get("Symbol","")).strip()
+        if sym:
+            leaps_by_sym[sym].append(r)
+
+    for r in cc_rows:
+        sym = str(r.get("Symbol","")).strip()
+        if sym:
+            shorts_by_sym[sym].append(r)
+
+    overlap = sorted(set(leaps_by_sym.keys()) & set(shorts_by_sym.keys()))
+
+    print("\n──────────────── OVERLAP ────────────────")
+    print(f"Symbols in both sheets: {len(overlap)}")
+    if overlap:
+        print("Example symbols:", ", ".join(overlap[:20]))
+
+    # Try to build pairings
+    pair_rows: List[Dict[str, Any]] = []
+    missed: List[Tuple[str, str]] = []
+
+    for sym in overlap:
+        leaps = leaps_by_sym[sym]
+        shorts = shorts_by_sym[sym]
+
+        long_pick, why_long = pick_best_long(leaps)
+        if not long_pick:
+            missed.append((sym, why_long or "failed to pick long"))
+            continue
+
+        short_list, why_short = short_candidates(shorts)
+        if not short_list:
+            missed.append((sym, why_short or "no short within window"))
+            continue
+
+        # Compute long extrinsic once
+        ex = long_extrinsic(long_pick)
+        if ex is None or ex <= 0:
+            missed.append((sym, "LEAP extrinsic missing/<=0"))
+            continue
+
+        # keep top N short for this long
+        for sr in short_list[:TOP_PER_SYMBOL]:
+            cov = coverage_ratio(long_pick, sr)
+            pair_rows.append({
+                "symbol": sym,
+                "long_exp": str(long_pick.get("Exp Date","")),
+                "long_dte": i(long_pick.get("DTE")),
+                "long_strike": f(long_pick.get("Strike")),
+                "long_delta": f(long_pick.get("Delta")),
+                "long_extr": ex,
+                "short_exp": str(sr.get("Exp Date","")),
+                "short_dte": i(sr.get("DTE")),
+                "short_strike": f(sr.get("Strike")),
+                "short_delta": f(sr.get("Delta")),
+                "short_bid": f(sr.get("Bid")),
+                "coverage": cov,
+            })
+
+    # Sort pairs by coverage desc, then short_bid desc
+    pair_rows.sort(key=lambda r: (r.get("coverage") or 0.0, r.get("short_bid") or 0.0), reverse=True)
+
+    print("\n──────────────── CANDIDATE PAIRS ────────")
+    if not pair_rows:
+        print("(no candidate pairs formed with current window)")
     else:
-        tiers = [50.0, 75.0] if fills else [50.0]
+        # Trim output for readability
+        show = pair_rows[:TOP_SYMBOLS]
+        header = (
+            "Sym   L.Exp       L.DTE  L.Strk  LΔ     L.Extr  "
+            "S.Exp       S.DTE  S.Strk  SΔ     S.Bid  Cov"
+        )
+        print(header)
+        print("-"*len(header))
+        for r in show:
+            print(
+                f"{r['symbol']:<5} "
+                f"{(r['long_exp'] or ''):<11} "
+                f"{(r['long_dte'] if r['long_dte'] is not None else ''):>5}  "
+                f"{money(r['long_strike']):>6}  "
+                f"{(f'{r['long_delta']:.3f}' if r['long_delta'] is not None else ''):>5}  "
+                f"{money(r['long_extr']):>6}  "
+                f"{(r['short_exp'] or ''):<11} "
+                f"{(r['short_dte'] if r['short_dte'] is not None else ''):>5}  "
+                f"{money(r['short_strike']):>6}  "
+                f"{(f'{r['short_delta']:.3f}' if r['short_delta'] is not None else ''):>5}  "
+                f"{money(r['short_bid']):>5}  "
+                f"{(f'{r['coverage']:.2f}' if r['coverage'] is not None else ''):>4}"
+            )
 
-    found = 0
-    for sym, rows in by.items():
-        und = under.get(sym, Underlying(sym, None))
-        longs  = [r for r in rows if is_long_leap_call(r, und.last)]
-        shorts = [r for r in rows if is_short_near_call(r, und.last)]
-        if not longs or not shorts: continue
+    # Print misses with reasons (first few)
+    if missed:
+        print("\n──────────────── WHY NO PAIR (sample) ───")
+        for sym, why in missed[:24]:
+            print(f"{sym:<6} → {why}")
 
-        long_pick = sorted(longs, key=lambda r: (r.dte or 0, r.delta or 0), reverse=True)[0]
-        def key_short(r): return (abs((r.dte or 0)-35), abs((abs(r.delta or 0.35))-0.35))
-        short_pick = sorted(shorts, key=key_short)[0]
+    # Friendly summary if still nothing
+    if not pair_rows:
+        print("\nTips:")
+        print(f"  • Adjust SHORT window via constants: DTE [{SHORT_DTE_MIN},{SHORT_DTE_MAX}], Δ [{SHORT_DELTA_MIN},{SHORT_DELTA_MAX}]")
+        print(f"  • Long pick aims for Δ [{LONG_DELTA_MIN},{LONG_DELTA_MAX}] with max DTE; edit in pmcc_monitor.py")
 
-        report(sym, und, long_pick, short_pick, fills, tiers, market=market)
-        found += 1
+    print("\nGenerated:", now_utc())
+    return 0
 
-    if found == 0:
-        print("No PMCC pairs detected (need a long-dated ITM call and a nearer-dated short OTM call on the same symbol).")
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
