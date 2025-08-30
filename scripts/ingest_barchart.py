@@ -1,151 +1,161 @@
-# scripts/ingest_barchart.py
+#!/usr/bin/env python3
 from __future__ import annotations
 
 import json
 import re
 import shutil
-from datetime import datetime
+from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional, Tuple, List
+from typing import Optional
 
 import pandas as pd
 
-# ----- Paths (no imports from rank_base to avoid circulars)
+
+# --- Paths -------------------------------------------------------------------
 ROOT = Path(__file__).resolve().parents[1]
-DATA_DIR = ROOT / "data"
-INCOMING = DATA_DIR / "incoming"
-ARCHIVE = DATA_DIR / "archive"
-L1_DIR = DATA_DIR / "l1"
+DATA = ROOT / "data"
+INCOMING = DATA / "incoming"
+ARCHIVE = DATA / "archive"
+L1 = DATA / "l1"
 
-KIND_TOKENS = {
-    # canonical screener kinds mapped by filename tokens (OR logic)
-    "covered_call": ["covered-call-option-screener"],
-    "csp": ["naked-put-option-screener"],
-    "pmcc": ["long-call-options-screener", "long-call-leap"],
-    "diagonal": ["long-call-diagonal-option-screener"],
-    "iron_condor": ["short-iron-condor-option-screener"],
-    "vertical_bull_call": ["bull-call-spread-option-screener"],
-    "vertical_bull_put": ["bull-put-spread-option-screener"],
-    "indices": ["market-indices"],
-}
+L1.mkdir(parents=True, exist_ok=True)
 
-FOOTER_RE = re.compile(
-    r"AS OF\s+(\d{2})-(\d{2})-(\d{4})\s+(\d{1,2}):(\d{2})(AM|PM)\s+([A-Z]{2,5})",
-    re.IGNORECASE,
+# --- File → kind routing (schema-on-read) ------------------------------------
+# Keep it dead simple: infer kind from filename tokens.
+ROUTES: list[tuple[re.Pattern, str]] = [
+    (re.compile(r"covered-call-option-screener", re.I),        "covered_call"),
+    (re.compile(r"naked-put-option-screener", re.I),            "csp"),
+    (re.compile(r"long-call-diagonal-option-screener", re.I),   "diagonal"),
+    (re.compile(r"short-iron-condor-option-screener", re.I),    "iron_condor"),
+    (re.compile(r"long-call-options-screener", re.I),           "pmcc"),  # used by PMCC/LEAP readers
+    (re.compile(r"bull-call-spread-option-screener", re.I),     "vertical_bull_call"),
+    (re.compile(r"bull-put-spread-option-screener", re.I),      "vertical_bull_put"),
+    (re.compile(r"market-indices", re.I),                       "indices"),
+    # misc catch-alls (we still ingest to L1/misc for future use):
+    (re.compile(r"bear-call-spread-option-screener", re.I),     "misc"),
+    (re.compile(r"bear-put-spread-option-screener", re.I),      "misc"),
+]
+
+FOOTER_TS_RE = re.compile(
+    r"(?P<ts>(?:Downloaded|DOWNLOADED).*?\b(\d{2}-\d{2}-\d{4})\s+(\d{1,2}:\d{2}\s*[AP]M)\s*(\w{3})?)",
+    re.I,
 )
 
+@dataclass(frozen=True)
+class IngestResult:
+    src: Path
+    kind: str
+    out: Path
+    rows: int
+    footer: str
+    timestamp: str
 
-def _ensure_dirs() -> None:
-    for p in [INCOMING, ARCHIVE, L1_DIR, ROOT / "outputs" / "web_feed"]:
-        p.mkdir(parents=True, exist_ok=True)
-    # per-kind L1 subdirs
-    for k in KIND_TOKENS:
-        (L1_DIR / k).mkdir(parents=True, exist_ok=True)
-    (L1_DIR / "misc").mkdir(parents=True, exist_ok=True)
+def _utc_now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
+def _infer_kind(p: Path) -> Optional[str]:
+    name = p.name
+    for pat, kind in ROUTES:
+        if pat.search(name):
+            return kind
+    return None
 
-def _guess_kind(basename: str) -> str:
-    lower = basename.lower()
-    for kind, tokens in KIND_TOKENS.items():
-        for t in tokens:
-            if t in lower:
-                return kind
-    return "misc"
-
+def _read_footer_line(p: Path) -> str:
+    # Read only the last line, but avoid loading huge files into memory
+    with p.open("rb") as f:
+        f.seek(0, 2)
+        size = f.tell()
+        back = min(size, 4096)
+        f.seek(size - back)
+        tail = f.read().decode(errors="ignore")
+    last_line = tail.splitlines()[-1].strip() if tail.splitlines() else ""
+    return last_line
 
 def _parse_footer_timestamp(footer: str) -> str:
-    """
-    Try to produce ISO-8601 (local-naive). If not matched, return the raw footer.
-    Example footer: 'DOWNLOADED FROM BARCHART.COM AS OF 08-28-2025 09:52AM CDT'
-    """
-    m = FOOTER_RE.search(footer)
-    if not m:
-        return footer.strip()
-    mm, dd, yyyy, hh, mi, ap, tz = m.groups()
-    hour = int(hh) % 12
-    if ap.upper() == "PM":
-        hour += 12
-    try:
-        dt = datetime(int(yyyy), int(mm), int(dd), hour, int(mi))
-        return dt.strftime("%Y-%m-%dT%H:%M:00")  # keep it simple
-    except Exception:
-        return footer.strip()
+    m = FOOTER_TS_RE.search(footer or "")
+    return m.group("ts").strip() if m else (footer or "")
 
+def _csv_to_l1_json(src: Path, kind: str) -> IngestResult:
+    footer_line = _read_footer_line(src)
+    footer_ts = _parse_footer_timestamp(footer_line)
 
-def _read_csv_with_footer(path: Path) -> Tuple[pd.DataFrame, str]:
-    """
-    Read all rows except the last line (footer). Return (df, footer_line).
-    """
-    # Read CSV minus footer
-    df = pd.read_csv(path, engine="python", skipfooter=1)
-    # Grab footer
-    with path.open("r", encoding="utf-8", errors="ignore") as f:
-        lines = f.readlines()
-    footer = lines[-1].strip() if lines else ""
-    return df, footer
+    # Read all rows except the final footer line
+    df = pd.read_csv(src, engine="python", skipfooter=1)
 
+    # Per-row metadata (schema-on-read; do NOT drop any columns)
+    df["__timestamp__"] = footer_ts
+    df["__ingested_at__"] = _utc_now_iso()
+    df["__source_file__"] = str(src.name)
+    df["__kind__"] = kind
 
-def _df_to_l1_records(
-    df: pd.DataFrame,
-    timestamp: str,
-    source_file: str,
-    kind: str,
-) -> List[dict]:
+    # Write as newline-delimited JSON for easy downstream reading
+    out_dir = L1 / kind
+    out_dir.mkdir(parents=True, exist_ok=True)
+    # Make an output name that mirrors the CSV name
+    out_path = out_dir / (src.stem + ".json")
     records = df.to_dict(orient="records")
-    for r in records:
-        r["timestamp"] = timestamp
-        r["__source_file__"] = source_file
-        r["__kind__"] = kind
-    return records
+    with out_path.open("w", encoding="utf-8") as f:
+        for rec in records:
+            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
 
+    return IngestResult(
+        src=src,
+        kind=kind,
+        out=out_path,
+        rows=len(df),
+        footer=footer_line,
+        timestamp=footer_ts,
+    )
 
-def _write_json(path: Path, data) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2)
+def _iter_csvs() -> list[Path]:
+    csvs: list[Path] = []
+    # direct files in INCOMING and ARCHIVE root
+    csvs.extend(sorted(INCOMING.glob("*.csv")))
+    csvs.extend(sorted(ARCHIVE.glob("*.csv")))
+    # deeper dated folders under ARCHIVE
+    csvs.extend(sorted(ARCHIVE.glob("*/*.csv")))
+    return csvs
 
+def _archive_incoming_file(p: Path) -> None:
+    if p.parent == INCOMING:
+        # put into a dated folder; keep filename unchanged
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        dest_dir = ARCHIVE / stamp
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(p), str(dest_dir / p.name))
 
 def main() -> None:
-    _ensure_dirs()
-    csvs = sorted(p for p in INCOMING.glob("*.csv"))
-    moved = 0
-    written = 0
-    l1_files = []
+    csvs = _iter_csvs()
+    if not csvs:
+        print("\n────────────────────────────────────────────────────────────")
+        print("INGEST SUMMARY")
+        print(f"incoming: {INCOMING}")
+        print("  (no files in incoming or archive roots)")
+        print("────────────────────────────────────────────────────────────\n")
+        return
 
-    for csv_path in csvs:
-        basename = csv_path.name
-        kind = _guess_kind(basename)
+    results: list[IngestResult] = []
+    for src in csvs:
+        kind = _infer_kind(src)
+        if not kind:
+            # skip unknown CSVs silently
+            continue
+        try:
+            res = _csv_to_l1_json(src, kind)
+            results.append(res)
+            # move out of incoming once processed
+            _archive_incoming_file(src)
+        except Exception as e:
+            print(f"[ERR] {src.name}: {e}")
 
-        # Read and parse footer for timestamp
-        df, footer = _read_csv_with_footer(csv_path)
-        ts = _parse_footer_timestamp(footer)
-
-        # Layer-1 JSON output (1:1 rows, plus timestamp + provenance)
-        # Keep filename in the L1 name for easy traceability.
-        l1_out = L1_DIR / kind / (basename.replace(".csv", ".json"))
-        records = _df_to_l1_records(df, ts, basename, kind)
-        _write_json(l1_out, records)
-        l1_files.append(str(l1_out))
-        written += 1
-
-        # Archive the CSV
-        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-        arch_dir = ARCHIVE / stamp
-        arch_dir.mkdir(parents=True, exist_ok=True)
-        shutil.move(str(csv_path), str(arch_dir / basename))
-        moved += 1
-
-    # Summary
-    print("\n" + "─" * 60)
+    # Pretty summary
+    print("\n────────────────────────────────────────────────────────────")
     print("INGEST SUMMARY")
     print(f"incoming: {INCOMING}")
-    if not csvs:
-        print("  (no files in incoming)")
-    else:
-        for lf in l1_files:
-            print(f"  [L1] {lf}")
-    print("─" * 60 + "\n")
-
+    for r in results:
+        print(f"  [L1/{r.kind}] {r.out}  (rows={r.rows}, ts='{r.timestamp}')")
+    print("────────────────────────────────────────────────────────────\n")
 
 if __name__ == "__main__":
     main()

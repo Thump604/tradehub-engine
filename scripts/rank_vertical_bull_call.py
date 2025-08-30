@@ -1,31 +1,27 @@
-# scripts/rank_vertical_bull_call.py
 from __future__ import annotations
 
 from pathlib import Path
 
 from .rank_base import (
-    ensure_paths,
-    load_l1,
+    WEB_FEED,
+    read_l1_latest,
     base_suggestion_fields,
     write_json,
-    WEB_FEED,
+    utc_now_iso,
 )
 
-OUT_FILE = WEB_FEED / "vertical_bull_call_suggestions.json"
 
+OUT = WEB_FEED / "vertical_bull_call_suggestions.json"
 
 def main() -> None:
-    ensure_paths()
-
-    # Read latest Layer-1 for bull-call spreads (schema-on-read; full fidelity)
-    rows = load_l1("vertical_bull_call")
-
-    # Build minimal suggestions (no schema guessing, just common fields)
-    items = base_suggestion_fields(rows, "vertical_bull_call")
-
-    write_json(OUT_FILE, items)
-    print(f"[saved] {OUT_FILE}")
-
+    df = read_l1_latest("vertical_bull_call")
+    items = base_suggestion_fields(df, "vertical_bull_call") if df is not None else []
+    payload = {
+        "generated_at": utc_now_iso(),
+        "items": items,
+    }
+    write_json(OUT, payload)
+    print(f"[saved] {OUT} (items={len(items)})")
 
 if __name__ == "__main__":
     main()

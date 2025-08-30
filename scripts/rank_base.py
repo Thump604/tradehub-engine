@@ -1,154 +1,98 @@
-# scripts/rank_base.py
 from __future__ import annotations
 
 import json
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterable, List, Sequence
+from typing import Iterable, List, Dict, Any, Optional
 
 import pandas as pd
 
-# ---- Paths (shared)
-ROOT = Path(__file__).resolve().parents[1]
-DATA_DIR = ROOT / "data"
-L1_DIR = DATA_DIR / "l1"
-WEB_FEED = ROOT / "outputs" / "web_feed"
 
-def ensure_paths() -> None:
-    WEB_FEED.mkdir(parents=True, exist_ok=True)
-    L1_DIR.mkdir(parents=True, exist_ok=True)
+# --- Paths -------------------------------------------------------------------
+ROOT: Path = Path(__file__).resolve().parents[1]
+DATA: Path = ROOT / "data"
+L1: Path = DATA / "l1"
+WEB_FEED: Path = ROOT / "outputs" / "web_feed"
+WEB_FEED.mkdir(parents=True, exist_ok=True)
 
 def utc_now_iso() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
-def write_json(path: Path, data: Any) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2)
+def write_json(path: Path | str, obj: Any) -> None:
+    p = Path(path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    with p.open("w", encoding="utf-8") as f:
+        json.dump(obj, f, ensure_ascii=False, indent=2)
 
-def read_json(path: Path) -> Any:
-    with path.open("r", encoding="utf-8") as f:
-        return json.load(f)
-
-def read_items_forgiving(path: Path) -> List[dict]:
-    """
-    Returns a list of dicts whether file is:
-      - a JSON array, or
-      - an object with 'items', or
-      - newline-delimited JSON objects.
-    """
-    text = path.read_text(encoding="utf-8").strip()
-    if not text:
+def read_items_forgiving(path: Path | str) -> List[Dict[str, Any]]:
+    p = Path(path)
+    if not p.exists():
         return []
-    if text[0] == "[":
-        return json.loads(text)
-    if text[0] == "{":
-        obj = json.loads(text)
-        if isinstance(obj, dict) and "items" in obj and isinstance(obj["items"], list):
-            return obj["items"]
-        # Might be a single object; wrap it
-        return [obj]
-    # Fallback: JSONL
-    items = []
-    for line in text.splitlines():
-        line = line.strip()
-        if not line:
-            continue
+    with p.open("r", encoding="utf-8") as f:
         try:
-            items.append(json.loads(line))
+            data = json.load(f)
+            if isinstance(data, list):
+                return data
+            # allow {"items":[...]}
+            if isinstance(data, dict) and "items" in data and isinstance(data["items"], list):
+                return data["items"]
         except Exception:
-            pass
-    return items
+            return []
+    return []
 
-def _pick(row: dict, keys: Sequence[str], default: Any = None) -> Any:
-    for k in keys:
-        if k in row and row[k] not in (None, ""):
-            return row[k]
+# --- L1 loading ---------------------------------------------------------------
+def _l1_files(kind: str) -> list[Path]:
+    d = L1 / kind
+    if not d.exists():
+        return []
+    return sorted(d.glob("*.json"))
+
+def read_l1_latest(kind: str) -> Optional[pd.DataFrame]:
+    """Read latest L1 jsonl for a given kind; returns None if missing."""
+    files = _l1_files(kind)
+    if not files:
+        return None
+    # pick the newest by modified time
+    files.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+    fp = files[0]
+    records: list[dict] = []
+    with fp.open("r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                records.append(json.loads(line))
+            except Exception:
+                continue
+    if not records:
+        return None
+    return pd.DataFrame.from_records(records)
+
+# --- Suggestion shaping -------------------------------------------------------
+def _pick(df_row: dict, *candidates: str, default: str = "") -> str:
+    for c in candidates:
+        if c in df_row and pd.notna(df_row[c]):
+            return str(df_row[c])
     return default
 
-def _to_iso_date(value: Any) -> str:
-    if value in (None, ""):
-        return "—"
-    # Try pandas for robust parsing
-    try:
-        dt = pd.to_datetime(value, errors="coerce", utc=False)
-        if pd.isna(dt):
-            return str(value)
-        # date only if time isn't needed
-        return str(dt.date())
-    except Exception:
-        return str(value)
-
-def load_l1(kind: str) -> List[dict]:
+def base_suggestion_fields(df: pd.DataFrame, strategy: str) -> list[dict]:
     """
-    Load the most recent Layer-1 JSON for a given kind.
-    If multiple exist, pick the freshest by modtime.
+    Schema-agnostic shaping: carry everything forward + minimal normalized fields
+    strategy: e.g., 'vertical_bull_call'
     """
-    dir_ = L1_DIR / kind
-    if not dir_.exists():
-        return []
-    files = sorted(dir_.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
-    if not files:
-        return []
-    return read_items_forgiving(files[0])
-
-# ----- Back-compat generic suggestion builder -------------------------------
-def base_suggestion_fields(data: Any, strategy: str) -> List[dict]:
-    """
-    Back-compatible helper used by older rank scripts:
-    - If 'data' is a DataFrame -> iterate rows.
-    - If list[dict] -> iterate dicts.
-    Output: {symbol, strategy, expiry, score}
-    No schema assumptions beyond common field names.
-    """
-    # normalize into list of dicts
-    rows: List[dict] = []
-    if isinstance(data, pd.DataFrame):
-        rows = data.to_dict(orient="records")
-    elif isinstance(data, list):
-        rows = [r for r in data if isinstance(r, dict)]
-    elif isinstance(data, dict):
-        rows = [data]
-    else:
-        rows = []
-
-    out: List[dict] = []
-    for r in rows:
-        symbol = _pick(
-            r,
-            ["symbol", "Symbol", "Underlying Symbol", "Underlying", "Ticker", "ticker"],
-            default="",
-        )
-        expiry = _pick(
-            r,
-            [
-                "expiration",
-                "Expiration",
-                "Expiration Date",
-                "Exp Date",
-                "Expiry",
-                "expiry",
-                "expirationDate",
-            ],
-            default="—",
-        )
-        expiry_iso = _to_iso_date(expiry)
-        # score: try a few plausible numeric fields; else 0.0
-        score = _pick(
-            r,
-            ["score", "Score", "Return", "ROI", "Edge", "edge", "Rank", "rank"],
-            default=0.0,
-        )
-        try:
-            score = float(score)
-        except Exception:
-            score = 0.0
-        out.append(
-            {
-                "symbol": str(symbol).upper() if symbol else "",
-                "strategy": strategy,
-                "expiry": expiry_iso,
-                "score": score,
-            }
-        )
-    return out
+    items: list[dict] = []
+    for _, row in df.iterrows():
+        r = dict(row)  # carry all original columns through
+        # minimal normalized fields used by web/alerts
+        symbol = _pick(r, "Symbol", "Underlying Symbol", "UnderlyingSymbol", "Underlying", default="")
+        expiry = _pick(r, "Expiration Date", "Expiration", "Expiry", default="—")
+        r_norm = {
+            "symbol": symbol,
+            "strategy": strategy,
+            "expiry": expiry,
+            "score": 0.0,  # keep simple; rankers can post-process if needed
+        }
+        # Place normalized keys first, then the full record under 'raw'
+        items.append({**r_norm, "raw": r})
+    return items
