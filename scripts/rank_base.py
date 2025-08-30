@@ -106,59 +106,45 @@ def read_l1_latest(kind: str) -> tuple["pd.DataFrame | None", dict[str, any]]:
 
 def base_suggestion_fields(*args, **kwargs):
     """
-    Legacy positional:
-        base_suggestion_fields(df, strategy) -> list[dict]
-    Modern keyword:
-        base_suggestion_fields(symbol=..., strategy=..., expiry=..., score=...) -> dict
+    Dual-mode:
+      1) Legacy: base_suggestion_fields(df, strategy) -> list[dict]
+      2) Modern: base_suggestion_fields(symbol=..., strategy=..., expiry=..., score=...) -> dict
     """
-    # Heuristic: treat first positional arg as a DataFrame (or DF-like) if it
-    # *exists* and looks table-like (has .iterrows or .columns or .shape) and
-    # is NOT a scalar/sequence/dict/string.
+    # Legacy path: first positional looks table-like (has .iterrows or .columns or .shape)
     if args:
         a0 = args[0]
-        is_scalar = isinstance(a0, (int, float, complex, bool))
-        is_text = isinstance(a0, (str, bytes))
-        is_seq = isinstance(a0, (list, tuple))
-        is_mapping = isinstance(a0, dict)
         looks_tabular = any(hasattr(a0, attr) for attr in ("iterrows", "columns", "shape"))
-        # If it quacks like a table and isn't a common non-table type => legacy path
-        if looks_tabular and not (is_scalar or is_text or is_seq or is_mapping):
-            import math
+        if looks_tabular:
             df = a0
             strategy = args[1] if len(args) > 1 else kwargs.get("strategy", "unknown")
+            # Accept either a real DataFrame or a list of dict rows with 'get'
             items = []
+            # Create a row iterator
+            if hasattr(df, "iterrows"):
+                iterator = df.iterrows()
+                get_from_row = lambda row, k: row.get(k) if hasattr(row, "get") else getattr(row, k, None)
+            elif isinstance(df, list):
+                iterator = enumerate(df)
+                get_from_row = lambda row, k: row.get(k) if hasattr(row, "get") else getattr(row, k, None)
+            else:
+                iterator = []
+                get_from_row = lambda row, k: None
+
             sym_cols = ("symbol", "Symbol", "ticker", "Ticker")
             exp_cols = ("expiry", "Expiration", "expiration", "Exp", "exp")
             score_cols = ("score", "Score", "rank", "Rank")
-            # Gracefully support objects that mimic DF
-            it = getattr(df, "iterrows", None)
-            if callable(it):
-                iterator = it()
-            else:
-                # fallback: try to iterate over rows if df is a list of dicts
-                iterator = enumerate(df) if isinstance(df, list) else []
+
             for _, row in iterator:
-                # If row isn't a mapping, try attribute access fallback
-                get = (lambda k: row.get(k)) if hasattr(row, "get") else (lambda k: getattr(row, k, None))
-                # symbol
-                sym = None
-                for c in sym_cols:
-                    v = get(c)
-                    if v:
-                        sym = str(v); break
-                # expiry
-                exp = None
-                for c in exp_cols:
-                    v = get(c)
-                    if v:
-                        exp = str(v); break
-                # score
-                sc = 0.0
+                sym = next((str(get_from_row(row, c)) for c in sym_cols if get_from_row(row, c)), None)
+                exp = next((str(get_from_row(row, c)) for c in exp_cols if get_from_row(row, c)), None)
+                sc  = 0.0
                 for c in score_cols:
-                    v = get(c)
-                    if v is not None and not (isinstance(v, float) and (v != v)):  # not NaN
-                        try: sc = float(v)
-                        except Exception: sc = 0.0
+                    v = get_from_row(row, c)
+                    if v is not None:
+                        try:
+                            sc = float(v)
+                        except Exception:
+                            sc = 0.0
                         break
                 items.append({
                     "symbol": (sym or "UNKNOWN").upper(),
@@ -168,5 +154,14 @@ def base_suggestion_fields(*args, **kwargs):
                 })
             return items
 
-    # Otherwise, modern kw-only path
-    return base_suggestion_fields_kw(**kwargs)
+    # Modern kw path: return a single normalized dict
+    symbol   = kwargs.get("symbol", "UNKNOWN")
+    strategy = kwargs["strategy"]  # required
+    expiry   = kwargs.get("expiry", "—")
+    score    = float(kwargs.get("score", 0.0))
+    return {
+        "symbol": str(symbol).upper(),
+        "strategy": strategy,
+        "expiry": expiry,
+        "score": score,
+    }
