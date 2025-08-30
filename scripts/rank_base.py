@@ -73,3 +73,48 @@ def load_barchart_csv_any(*args, **kwargs) -> pd.DataFrame:
     we return an empty DataFrame. New rankers should use read_l1(kind).
     """
     return pd.DataFrame()
+
+def read_items_forgiving(path: Path | str) -> tuple[list[dict[str, any]], dict[str, any]]:
+    """Read a suggestions-like JSON file. Returns (items, meta).
+    - If root is a list -> (list, {"source": ...})
+    - If root is dict with "items" -> (items, rest_of_fields_as_meta)
+    - On errors -> ([], {"source": ..., "error": ...})
+    """
+    import json as _json
+    pth = Path(path)
+    try:
+        if not pth.exists():
+            return [], {"source": str(pth), "error": "missing"}
+        with open(pth, "r") as _f:
+            data = _json.load(_f)
+        if isinstance(data, list):
+            return data, {"source": str(pth)}
+        if isinstance(data, dict):
+            items = data.get("items", [])
+            meta = {k: v for k, v in data.items() if k != "items"}
+            meta.setdefault("source", str(pth))
+            if not isinstance(items, list):
+                items = []
+            return items, meta
+        return [], {"source": str(pth), "error": "unexpected_root_type"}
+    except Exception as _e:
+        return [], {"source": str(pth), "error": repr(_e)}
+
+def read_l1_latest(kind: str) -> tuple["pd.DataFrame | None", dict[str, any]]:
+    """Alias for read_l1(kind)."""
+    return read_l1(kind)
+
+def base_suggestion_fields(
+    *,
+    symbol: str | None,
+    strategy: str,
+    expiry: str | None = None,
+    score: float | int = 0,
+) -> dict[str, any]:
+    """Normalize suggestion fields for legacy rankers."""
+    return {
+        "symbol": (symbol or "UNKNOWN").upper(),
+        "strategy": strategy,
+        "expiry": expiry or "—",
+        "score": float(score),
+    }
