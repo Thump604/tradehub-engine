@@ -14,6 +14,22 @@ FILES = [
 ]
 
 
+def flatten_items(x):
+    # Accept list, dict-with-items, or single dict
+    out = []
+    if isinstance(x, list):
+        for el in x:
+            if isinstance(el, list):
+                out.extend(flatten_items(el))
+            elif isinstance(el, dict):
+                out.append(el)
+    elif isinstance(x, dict):
+        if "items" in x and isinstance(x["items"], list):
+            out.extend(flatten_items(x["items"]))
+        else:
+            out.append(x)
+    return out
+
 def main():
     merged: List[dict] = []
     for name in FILES:

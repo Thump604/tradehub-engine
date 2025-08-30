@@ -118,3 +118,73 @@ def base_suggestion_fields(
         "expiry": expiry or "—",
         "score": float(score),
     }
+
+
+def base_suggestion_fields_kw(
+    *,
+    symbol: str | None,
+    strategy: str,
+    expiry: str | None = None,
+    score: float | int = 0,
+) -> dict[str, float | str]:
+    """Modern helper: returns a single normalized suggestion dict."""
+    return {
+        "symbol": (symbol or "UNKNOWN").upper(),
+        "strategy": strategy,
+        "expiry": expiry or "—",
+        "score": float(score),
+    }
+
+def base_suggestion_fields(*args, **kwargs):
+    """Compatibility wrapper.
+
+    Legacy positional form:
+        base_suggestion_fields(df: pd.DataFrame, strategy: str) -> list[dict]
+
+    Modern keyword form:
+        base_suggestion_fields(symbol=..., strategy=..., expiry=..., score=...) -> dict
+    """
+    # Legacy: DataFrame in positional args
+    if args and hasattr(args[0], "iterrows"):
+        import math
+        df = args[0]
+        strategy = args[1] if len(args) > 1 else kwargs.get("strategy", "unknown")
+        items = []
+        # try common column names
+        sym_cols = ("symbol", "Symbol", "ticker", "Ticker")
+        exp_cols = ("expiry", "Expiration", "expiration", "Exp", "exp")
+        score_cols = ("score", "Score", "rank", "Rank")
+
+        for _, row in df.iterrows():
+            # symbol
+            sym = None
+            for c in sym_cols:
+                if c in row and row[c]:
+                    sym = str(row[c])
+                    break
+            # expiry
+            exp = None
+            for c in exp_cols:
+                if c in row and row[c]:
+                    exp = str(row[c])
+                    break
+            # score
+            sc = 0.0
+            for c in score_cols:
+                if c in row and row[c] is not None and not (isinstance(row[c], float) and math.isnan(row[c])):
+                    try:
+                        sc = float(row[c])
+                    except Exception:
+                        sc = 0.0
+                    break
+
+            items.append({
+                "symbol": (sym or "UNKNOWN").upper(),
+                "strategy": strategy,
+                "expiry": exp or "—",
+                "score": float(sc),
+            })
+        return items
+
+    # Modern: delegate to keyword-only version
+    return base_suggestion_fields_kw(**kwargs)
