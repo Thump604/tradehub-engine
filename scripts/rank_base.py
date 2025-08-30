@@ -107,37 +107,41 @@ def read_l1_latest(kind: str) -> tuple["pd.DataFrame | None", dict[str, any]]:
 def base_suggestion_fields(*args, **kwargs):
     """
     Dual-mode:
-      1) Legacy: base_suggestion_fields(df, strategy) -> list[dict]
+      1) Legacy: base_suggestion_fields(df_or_rows, strategy) -> list[dict]
+         - df_or_rows can be a pandas DataFrame OR list[dict]
       2) Modern: base_suggestion_fields(symbol=..., strategy=..., expiry=..., score=...) -> dict
     """
-    # Legacy path: first positional looks table-like (has .iterrows or .columns or .shape)
     if args:
         a0 = args[0]
-        looks_tabular = any(hasattr(a0, attr) for attr in ("iterrows", "columns", "shape"))
+        # consider list/tuple as tabular too
+        looks_tabular = isinstance(a0, (list, tuple)) or any(hasattr(a0, attr) for attr in ("iterrows", "columns", "shape"))
         if looks_tabular:
-            df = a0
-            strategy = args[1] if len(args) > 1 else kwargs.get("strategy", "unknown")
-            # Accept either a real DataFrame or a list of dict rows with 'get'
-            items = []
-            # Create a row iterator
-            if hasattr(df, "iterrows"):
-                iterator = df.iterrows()
-                get_from_row = lambda row, k: row.get(k) if hasattr(row, "get") else getattr(row, k, None)
-            elif isinstance(df, list):
-                iterator = enumerate(df)
-                get_from_row = lambda row, k: row.get(k) if hasattr(row, "get") else getattr(row, k, None)
+            df_or_rows = a0
+            strategy = (args[1] if len(args) > 1 else kwargs.get("strategy")) or "unknown"
+
+            # iterator over rows producing dict-like access
+            if hasattr(df_or_rows, "iterrows"):
+                iterator = df_or_rows.iterrows()
+                def get_from_row(row, k):
+                    return row.get(k) if hasattr(row, "get") else getattr(row, k, None)
+            elif isinstance(df_or_rows, (list, tuple)):
+                iterator = enumerate(df_or_rows)
+                def get_from_row(row, k):
+                    return row.get(k) if hasattr(row, "get") else getattr(row, k, None)
             else:
                 iterator = []
-                get_from_row = lambda row, k: None
+                def get_from_row(row, k):
+                    return None
 
-            sym_cols = ("symbol", "Symbol", "ticker", "Ticker")
-            exp_cols = ("expiry", "Expiration", "expiration", "Exp", "exp")
+            sym_cols   = ("symbol", "Symbol", "ticker", "Ticker")
+            exp_cols   = ("expiry", "Expiration", "expiration", "Exp", "exp")
             score_cols = ("score", "Score", "rank", "Rank")
 
+            items = []
             for _, row in iterator:
                 sym = next((str(get_from_row(row, c)) for c in sym_cols if get_from_row(row, c)), None)
                 exp = next((str(get_from_row(row, c)) for c in exp_cols if get_from_row(row, c)), None)
-                sc  = 0.0
+                sc = 0.0
                 for c in score_cols:
                     v = get_from_row(row, c)
                     if v is not None:
@@ -154,9 +158,9 @@ def base_suggestion_fields(*args, **kwargs):
                 })
             return items
 
-    # Modern kw path: return a single normalized dict
+    # Modern kw path (single object). Be forgiving on missing strategy.
     symbol   = kwargs.get("symbol", "UNKNOWN")
-    strategy = kwargs["strategy"]  # required
+    strategy = kwargs.get("strategy", "unknown")
     expiry   = kwargs.get("expiry", "—")
     score    = float(kwargs.get("score", 0.0))
     return {
