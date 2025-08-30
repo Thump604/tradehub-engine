@@ -1,98 +1,75 @@
-from __future__ import annotations
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+Rank/Base helpers for schema-on-read (L1 JSON) pipeline.
+This file is intentionally small and stable.
+"""
 
-import json
-from datetime import datetime, timezone
+from __future__ import annotations
 from pathlib import Path
-from typing import Iterable, List, Dict, Any, Optional
+from typing import Any, Dict, List, Tuple
+import json
+import math
+import datetime as dt
 
 import pandas as pd
 
+# Paths
+ROOT = Path(__file__).resolve().parent.parent
+DATA = ROOT / "data"
+L1 = DATA / "l1"
+ARCHIVE = DATA / "archive"     # kept for backward compat (some scripts import)
+BRONZE = DATA / "processed"    # kept for backward compat (some scripts import)
+OUTPUTS = ROOT / "outputs"
+WEB_FEED = OUTPUTS / "web_feed"
 
-# --- Paths -------------------------------------------------------------------
-ROOT: Path = Path(__file__).resolve().parents[1]
-DATA: Path = ROOT / "data"
-L1: Path = DATA / "l1"
-WEB_FEED: Path = ROOT / "outputs" / "web_feed"
-WEB_FEED.mkdir(parents=True, exist_ok=True)
+def ensure_dir(p: Path) -> None:
+    p.mkdir(parents=True, exist_ok=True)
 
 def utc_now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+    return dt.datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
 
-def write_json(path: Path | str, obj: Any) -> None:
-    p = Path(path)
-    p.parent.mkdir(parents=True, exist_ok=True)
-    with p.open("w", encoding="utf-8") as f:
-        json.dump(obj, f, ensure_ascii=False, indent=2)
+def clamp(x: float, lo: float, hi: float) -> float:
+    return max(lo, min(hi, x))
 
-def read_items_forgiving(path: Path | str) -> List[Dict[str, Any]]:
-    p = Path(path)
-    if not p.exists():
+def write_json(path: Path, data: Any) -> None:
+    ensure_dir(path.parent)
+    with open(path, "w") as f:
+        json.dump(data, f, indent=2)
+
+def read_json_items(path: Path) -> List[Dict[str, Any]]:
+    if not path.exists():
         return []
-    with p.open("r", encoding="utf-8") as f:
-        try:
-            data = json.load(f)
-            if isinstance(data, list):
-                return data
-            # allow {"items":[...]}
-            if isinstance(data, dict) and "items" in data and isinstance(data["items"], list):
-                return data["items"]
-        except Exception:
-            return []
+    with open(path, "r") as f:
+        data = json.load(f)
+    if isinstance(data, list):
+        return data
+    if isinstance(data, dict) and "items" in data and isinstance(data["items"], list):
+        return data["items"]
     return []
 
-# --- L1 loading ---------------------------------------------------------------
-def _l1_files(kind: str) -> list[Path]:
-    d = L1 / kind
-    if not d.exists():
-        return []
-    return sorted(d.glob("*.json"))
-
-def read_l1_latest(kind: str) -> Optional[pd.DataFrame]:
-    """Read latest L1 jsonl for a given kind; returns None if missing."""
-    files = _l1_files(kind)
+def read_l1(kind: str) -> Tuple[pd.DataFrame | None, Dict[str, Any]]:
+    """
+    Load most recent L1 JSON file for a given kind (folder under data/l1).
+    Returns (DataFrame or None, meta).
+    """
+    folder = L1 / kind
+    files = sorted(folder.glob("*.json"))
     if not files:
-        return None
-    # pick the newest by modified time
-    files.sort(key=lambda p: p.stat().st_mtime, reverse=True)
-    fp = files[0]
-    records: list[dict] = []
-    with fp.open("r", encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                records.append(json.loads(line))
-            except Exception:
-                continue
-    if not records:
-        return None
-    return pd.DataFrame.from_records(records)
+        return None, {"kind": kind, "source": None, "ts": None}
+    latest = files[-1]
+    try:
+        df = pd.read_json(latest, orient="records", dtype=False)
+    except ValueError:
+        # Fall back for newline-delimited JSON
+        df = pd.read_json(latest, lines=True, dtype=False)
+    meta = {"kind": kind, "source": latest.name, "ts": None}
+    return df, meta
 
-# --- Suggestion shaping -------------------------------------------------------
-def _pick(df_row: dict, *candidates: str, default: str = "") -> str:
-    for c in candidates:
-        if c in df_row and pd.notna(df_row[c]):
-            return str(df_row[c])
-    return default
-
-def base_suggestion_fields(df: pd.DataFrame, strategy: str) -> list[dict]:
+# ---- Backward-compat shim for older rankers expecting CSV loader ----
+def load_barchart_csv_any(*args, **kwargs) -> pd.DataFrame:
     """
-    Schema-agnostic shaping: carry everything forward + minimal normalized fields
-    strategy: e.g., 'vertical_bull_call'
+    Legacy helper expected by older rankers. We no longer use CSV; to avoid import crashes
+    we return an empty DataFrame. New rankers should use read_l1(kind).
     """
-    items: list[dict] = []
-    for _, row in df.iterrows():
-        r = dict(row)  # carry all original columns through
-        # minimal normalized fields used by web/alerts
-        symbol = _pick(r, "Symbol", "Underlying Symbol", "UnderlyingSymbol", "Underlying", default="")
-        expiry = _pick(r, "Expiration Date", "Expiration", "Expiry", default="—")
-        r_norm = {
-            "symbol": symbol,
-            "strategy": strategy,
-            "expiry": expiry,
-            "score": 0.0,  # keep simple; rankers can post-process if needed
-        }
-        # Place normalized keys first, then the full record under 'raw'
-        items.append({**r_norm, "raw": r})
-    return items
+    return pd.DataFrame()
