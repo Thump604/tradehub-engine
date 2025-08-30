@@ -1,3 +1,19 @@
+
+# --- flatten helper (idempotent) ---
+def _as_list_of_dicts(obj):
+    out = []
+    def rec(x):
+        if isinstance(x, dict):
+            # common container: {"items": [...]}
+            if "items" in x and isinstance(x["items"], list):
+                rec(x["items"])
+            else:
+                out.append(x)
+        elif isinstance(x, list):
+            for el in x:
+                rec(el)
+    rec(obj)
+    return out
 # scripts/build_trade_cards.py
 from __future__ import annotations
 
