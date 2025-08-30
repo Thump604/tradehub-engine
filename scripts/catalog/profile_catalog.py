@@ -21,17 +21,16 @@ def parse_footer_timestamp(s: str) -> Optional[str]:
     return m.group(1).strip() if m else None
 
 def coerce_type(sample_values: List[str]) -> str:
-    # very small heuristic: try int -> float -> bool -> date-ish -> string
     def is_int(x: str) -> bool:
         try:
-            _ = int(x.replace(",", ""))
+            int(x.replace(",", ""))
             return True
         except Exception:
             return False
 
     def is_float(x: str) -> bool:
         try:
-            _ = float(x.replace(",", ""))
+            float(x.replace(",", ""))
             return True
         except Exception:
             return False
@@ -39,19 +38,15 @@ def coerce_type(sample_values: List[str]) -> str:
     def is_bool(x: str) -> bool:
         return x.lower() in {"true", "false", "yes", "no"}
 
-    # Filter empties
-    vals = [v for v in (s or "").strip() for s in sample_values]
     vals = [v for v in sample_values if v not in ("", "NA", "N/A", "null", "None")]
     if not vals:
         return "string"
-
     if all(is_int(v) for v in vals):
         return "integer"
     if all(is_float(v) for v in vals):
         return "number"
     if all(is_bool(v) for v in vals):
         return "boolean"
-    # date-ish hint (very light)
     if all(re.search(r"\d{1,4}[-/]\d{1,2}[-/]\d{1,4}", v) for v in vals if re.search(r"\d", v)):
         return "date_like"
     return "string"
@@ -60,33 +55,27 @@ def profile_csv(in_csv: Path) -> Tuple[List[Dict[str, Any]], Optional[str]]:
     with in_csv.open("r", newline="", encoding="utf-8") as f:
         rdr = csv.DictReader(f)
         rows = list(rdr)
-
     footer_ts: Optional[str] = None
     if rows:
         last = rows[-1]
         if is_footer_row(last):
-            # capture timestamp (the only nonempty value)
             only_val = next((str(v).strip() for v in last.values() if v and str(v).strip()), "")
             footer_ts = parse_footer_timestamp(only_val)
             rows = rows[:-1]
-
     return rows, footer_ts
 
 def infer_schema(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
     if not rows:
         return {"columns": [], "row_count": 0}
-
     headers = list(rows[0].keys())
     total = len(rows)
     columns: List[Dict[str, Any]] = []
-
     for col in headers:
         values = [row.get(col, "") for row in rows]
         strvals = ["" if v is None else str(v).strip() for v in values]
         non_empty = [v for v in strvals if v not in ("", "NA", "N/A", "null", "None")]
         uniques = set(non_empty)
-        inferred = coerce_type(non_empty[:500])  # sample cap
-
+        inferred = coerce_type(non_empty[:500])
         columns.append({
             "name": col,
             "inferred_type": inferred,
@@ -95,7 +84,6 @@ def infer_schema(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
             "unique": len(uniques),
             "example": next((v for v in non_empty if v != ""), None)
         })
-
     return {"columns": columns, "row_count": total}
 
 def main() -> None:
@@ -106,6 +94,8 @@ def main() -> None:
     args = ap.parse_args()
 
     in_path = Path(args.in_csv)
+    if not in_path.exists():
+        raise SystemExit(f"File not found: {in_path}")
     outdir = Path(args.outdir)
     outdir.mkdir(parents=True, exist_ok=True)
 
