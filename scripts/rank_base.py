@@ -104,34 +104,39 @@ def read_l1_latest(kind: str) -> tuple["pd.DataFrame | None", dict[str, any]]:
     """Alias for read_l1(kind)."""
     return read_l1(kind)
 
+
 def base_suggestion_fields(*args, **kwargs):
     """
-    Dual-mode:
-      1) Legacy: base_suggestion_fields(df_or_rows, strategy) -> list[dict]
-         - df_or_rows can be a pandas DataFrame OR list[dict]
-      2) Modern: base_suggestion_fields(symbol=..., strategy=..., expiry=..., score=...) -> dict
+    Dual-mode, minimal:
+      Legacy: base_suggestion_fields(df_or_rows, strategy) -> list[dict]
+      Modern: base_suggestion_fields(symbol=..., strategy=..., expiry=..., score=...) -> dict
     """
+    def to_scalar(v):
+        # convert pandas/np scalars to python scalars; leave plain types as-is
+        try:
+            if hasattr(v, "item"):
+                return v.item()
+        except Exception:
+            pass
+        return v
+
     if args:
         a0 = args[0]
-        # consider list/tuple as tabular too
+        # treat list/tuple as tabular; pandas DF check via iterrows/columns/shape
         looks_tabular = isinstance(a0, (list, tuple)) or any(hasattr(a0, attr) for attr in ("iterrows", "columns", "shape"))
         if looks_tabular:
             df_or_rows = a0
             strategy = (args[1] if len(args) > 1 else kwargs.get("strategy")) or "unknown"
 
-            # iterator over rows producing dict-like access
+            # iterator + cell getter for both DF rows and dict rows
             if hasattr(df_or_rows, "iterrows"):
                 iterator = df_or_rows.iterrows()
-                def get_from_row(row, k):
-                    return row.get(k) if hasattr(row, "get") else getattr(row, k, None)
-            elif isinstance(df_or_rows, (list, tuple)):
-                iterator = enumerate(df_or_rows)
-                def get_from_row(row, k):
+                def get_cell(row, k):
                     return row.get(k) if hasattr(row, "get") else getattr(row, k, None)
             else:
-                iterator = []
-                def get_from_row(row, k):
-                    return None
+                iterator = enumerate(df_or_rows)
+                def get_cell(row, k):
+                    return row.get(k) if hasattr(row, "get") else getattr(row, k, None)
 
             sym_cols   = ("symbol", "Symbol", "ticker", "Ticker")
             exp_cols   = ("expiry", "Expiration", "expiration", "Exp", "exp")
@@ -139,17 +144,31 @@ def base_suggestion_fields(*args, **kwargs):
 
             items = []
             for _, row in iterator:
-                sym = next((str(get_from_row(row, c)) for c in sym_cols if get_from_row(row, c)), None)
-                exp = next((str(get_from_row(row, c)) for c in exp_cols if get_from_row(row, c)), None)
+                # first non-None after scalarization; no truthiness checks
+                sym = None
+                for c in sym_cols:
+                    v = to_scalar(get_cell(row, c))
+                    if v is not None:
+                        sym = str(v)
+                        break
+
+                exp = None
+                for c in exp_cols:
+                    v = to_scalar(get_cell(row, c))
+                    if v is not None:
+                        exp = str(v)
+                        break
+
                 sc = 0.0
                 for c in score_cols:
-                    v = get_from_row(row, c)
+                    v = to_scalar(get_cell(row, c))
                     if v is not None:
                         try:
                             sc = float(v)
                         except Exception:
                             sc = 0.0
                         break
+
                 items.append({
                     "symbol": (sym or "UNKNOWN").upper(),
                     "strategy": strategy,
@@ -158,7 +177,7 @@ def base_suggestion_fields(*args, **kwargs):
                 })
             return items
 
-    # Modern kw path (single object). Be forgiving on missing strategy.
+    # Modern kw path (single dict)
     symbol   = kwargs.get("symbol", "UNKNOWN")
     strategy = kwargs.get("strategy", "unknown")
     expiry   = kwargs.get("expiry", "—")
