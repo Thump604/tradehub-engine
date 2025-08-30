@@ -104,87 +104,69 @@ def read_l1_latest(kind: str) -> tuple["pd.DataFrame | None", dict[str, any]]:
     """Alias for read_l1(kind)."""
     return read_l1(kind)
 
-def base_suggestion_fields(
-    *,
-    symbol: str | None,
-    strategy: str,
-    expiry: str | None = None,
-    score: float | int = 0,
-) -> dict[str, any]:
-    """Normalize suggestion fields for legacy rankers."""
-    return {
-        "symbol": (symbol or "UNKNOWN").upper(),
-        "strategy": strategy,
-        "expiry": expiry or "—",
-        "score": float(score),
-    }
-
-
-def base_suggestion_fields_kw(
-    *,
-    symbol: str | None,
-    strategy: str,
-    expiry: str | None = None,
-    score: float | int = 0,
-) -> dict[str, float | str]:
-    """Modern helper: returns a single normalized suggestion dict."""
-    return {
-        "symbol": (symbol or "UNKNOWN").upper(),
-        "strategy": strategy,
-        "expiry": expiry or "—",
-        "score": float(score),
-    }
-
 def base_suggestion_fields(*args, **kwargs):
-    """Compatibility wrapper.
-
-    Legacy positional form:
-        base_suggestion_fields(df: pd.DataFrame, strategy: str) -> list[dict]
-
-    Modern keyword form:
+    """
+    Legacy positional:
+        base_suggestion_fields(df, strategy) -> list[dict]
+    Modern keyword:
         base_suggestion_fields(symbol=..., strategy=..., expiry=..., score=...) -> dict
     """
-    # Legacy: DataFrame in positional args
-    if args and hasattr(args[0], "iterrows"):
-        import math
-        df = args[0]
-        strategy = args[1] if len(args) > 1 else kwargs.get("strategy", "unknown")
-        items = []
-        # try common column names
-        sym_cols = ("symbol", "Symbol", "ticker", "Ticker")
-        exp_cols = ("expiry", "Expiration", "expiration", "Exp", "exp")
-        score_cols = ("score", "Score", "rank", "Rank")
+    # Heuristic: treat first positional arg as a DataFrame (or DF-like) if it
+    # *exists* and looks table-like (has .iterrows or .columns or .shape) and
+    # is NOT a scalar/sequence/dict/string.
+    if args:
+        a0 = args[0]
+        is_scalar = isinstance(a0, (int, float, complex, bool))
+        is_text = isinstance(a0, (str, bytes))
+        is_seq = isinstance(a0, (list, tuple))
+        is_mapping = isinstance(a0, dict)
+        looks_tabular = any(hasattr(a0, attr) for attr in ("iterrows", "columns", "shape"))
+        # If it quacks like a table and isn't a common non-table type => legacy path
+        if looks_tabular and not (is_scalar or is_text or is_seq or is_mapping):
+            import math
+            df = a0
+            strategy = args[1] if len(args) > 1 else kwargs.get("strategy", "unknown")
+            items = []
+            sym_cols = ("symbol", "Symbol", "ticker", "Ticker")
+            exp_cols = ("expiry", "Expiration", "expiration", "Exp", "exp")
+            score_cols = ("score", "Score", "rank", "Rank")
+            # Gracefully support objects that mimic DF
+            it = getattr(df, "iterrows", None)
+            if callable(it):
+                iterator = it()
+            else:
+                # fallback: try to iterate over rows if df is a list of dicts
+                iterator = enumerate(df) if isinstance(df, list) else []
+            for _, row in iterator:
+                # If row isn't a mapping, try attribute access fallback
+                get = (lambda k: row.get(k)) if hasattr(row, "get") else (lambda k: getattr(row, k, None))
+                # symbol
+                sym = None
+                for c in sym_cols:
+                    v = get(c)
+                    if v:
+                        sym = str(v); break
+                # expiry
+                exp = None
+                for c in exp_cols:
+                    v = get(c)
+                    if v:
+                        exp = str(v); break
+                # score
+                sc = 0.0
+                for c in score_cols:
+                    v = get(c)
+                    if v is not None and not (isinstance(v, float) and (v != v)):  # not NaN
+                        try: sc = float(v)
+                        except Exception: sc = 0.0
+                        break
+                items.append({
+                    "symbol": (sym or "UNKNOWN").upper(),
+                    "strategy": strategy,
+                    "expiry": exp or "—",
+                    "score": float(sc),
+                })
+            return items
 
-        for _, row in df.iterrows():
-            # symbol
-            sym = None
-            for c in sym_cols:
-                if c in row and row[c]:
-                    sym = str(row[c])
-                    break
-            # expiry
-            exp = None
-            for c in exp_cols:
-                if c in row and row[c]:
-                    exp = str(row[c])
-                    break
-            # score
-            sc = 0.0
-            for c in score_cols:
-                if c in row and row[c] is not None and not (isinstance(row[c], float) and math.isnan(row[c])):
-                    try:
-                        sc = float(row[c])
-                    except Exception:
-                        sc = 0.0
-                    break
-
-            items.append({
-                "symbol": (sym or "UNKNOWN").upper(),
-                "strategy": strategy,
-                "expiry": exp or "—",
-                "score": float(sc),
-            })
-        return items
-
-    # Modern: delegate to keyword-only version
+    # Otherwise, modern kw-only path
     return base_suggestion_fields_kw(**kwargs)
