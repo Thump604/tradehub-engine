@@ -51,6 +51,32 @@ def get_join_keys_pair() -> list[str]:
         if e.get("join_keys"): return list(e["join_keys"])
     return ["symbol", "Expiration Date", "Strike Price"]
 
+def coalesce_into(df: pd.DataFrame, name: str) -> None:
+    a, b = f"{name}_m", f"{name}_c"
+    if name in df.columns:  # already unified
+        return
+    if a in df.columns or b in df.columns:
+        df[name] = df.get(a)
+        if b in df.columns:
+            df[name] = df[name].where(df[name].notna(), df[b])
+
+def coalesce_core_fields(df: pd.DataFrame) -> pd.DataFrame:
+    # canonical fields used by ranking
+    targets = [
+        "DTE", "Delta", "IV Rank", "Moneyness",
+        "Profit Prob",
+        "Ann Rtn", "%Time Premium Ask Annual Rtn%", "Static Annual Return%", "Yield to Strike Annual Rtn%",
+        "Volume",
+    ]
+    for t in targets:
+        coalesce_into(df, t)
+    # keep canonical join keys clean too
+    for t in ["symbol", "Expiration Date", "Strike Price"]:
+        coalesce_into(df, t)
+    # log what we ended up with
+    jlog(stage="coalesce", present=[t for t in targets if t in df.columns])
+    return df
+
 def compute_rank(df: pd.DataFrame) -> pd.DataFrame:
     req = ["symbol", "Expiration Date", "Strike Price", "DTE"]
     missing = [c for c in req if c not in df.columns]
@@ -75,14 +101,7 @@ def compute_rank(df: pd.DataFrame) -> pd.DataFrame:
     target_mny = 2.0
     mny_band   = 5.0
 
-    weights = {
-        "annual_yield": 0.35,
-        "dte":          0.15,
-        "delta":        0.20,
-        "iv_rank":      0.15,
-        "profit_prob":  0.10,
-        "moneyness":    0.05,
-    }
+    weights = {"annual_yield":0.35, "dte":0.15, "delta":0.20, "iv_rank":0.15, "profit_prob":0.10, "moneyness":0.05}
 
     def clamp01(x):
         if x is None: return 0.0
@@ -100,14 +119,8 @@ def compute_rank(df: pd.DataFrame) -> pd.DataFrame:
     comp_del = delta.apply(lambda v: clamp01(1.0 - min(abs((v or 0)-ideal_delta)/max(ideal_delta,1e-9), 1.0)))
     comp_mny = mny.apply(lambda v: clamp01(1.0 - min(abs((v or 0)-target_mny)/max(mny_band,1e-9), 1.0)))
 
-    score = (
-        weights["annual_yield"] * comp_ay +
-        weights["dte"]          * comp_dte +
-        weights["delta"]        * comp_del +
-        weights["iv_rank"]      * comp_ivr +
-        weights["profit_prob"]  * comp_pp +
-        weights["moneyness"]    * comp_mny
-    )
+    score = (weights["annual_yield"]*comp_ay + weights["dte"]*comp_dte + weights["delta"]*comp_del +
+             weights["iv_rank"]*comp_ivr + weights["profit_prob"]*comp_pp + weights["moneyness"]*comp_mny)
 
     out = df.copy()
     out["__score"] = score
@@ -149,12 +162,16 @@ def main():
         df_joined = pd.merge(df_m, df_c, on=present, how="outer", suffixes=("_m","_c"))
         jlog(stage="join", mode="merge", join_keys=present, rows=len(df_joined))
 
+    df_joined = coalesce_core_fields(df_joined)
+
     ranked = compute_rank(df_joined)
     out_parquet = outdir / "ranked.parquet"
     ranked.sort_values("__score", ascending=False).to_parquet(out_parquet, index=False)
 
     head = ranked.sort_values("__score", ascending=False).head(args.top)
-    preview = head[["symbol","Expiration Date","Strike Price","DTE","__score","__rank"]].to_dict(orient="records")
+    subset = ["symbol","Expiration Date","Strike Price","DTE","__score","__rank"]
+    subset = [c for c in subset if c in head.columns]
+    preview = head[subset].to_dict(orient="records")
     jlog(stage="l2_rank", screener="covered_call", total=len(ranked), out=str(out_parquet), top=preview)
 
 if __name__ == "__main__":
