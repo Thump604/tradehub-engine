@@ -5,9 +5,7 @@ import pandas as pd
 from catalog.schemas import SCHEMAS
 
 def dedup_columns(cols):
-    """Ensure column names are unique by appending suffixes .1, .2, etc."""
-    seen = {}
-    out = []
+    seen, out = {}, []
     for c in cols:
         if c not in seen:
             seen[c] = 0
@@ -25,8 +23,6 @@ def load_and_align(path, screener, view):
         raise ValueError(f"schema not found: {schema_key}")
     header_map = schema.get("header_map", {})
     df = df.rename(columns=header_map)
-
-    # ✅ enforce unique names safely
     df.columns = dedup_columns(df.columns)
 
     keep = schema.get("logical_columns", schema["columns"])
@@ -50,7 +46,11 @@ def main():
     common_cols = list(set(df_main.columns) & set(df_custom.columns))
     key_cols = [c for c in ["symbol","Expiration Date","DTE","Strike Price"] if c in common_cols]
 
-    df_unified = pd.concat([df_main, df_custom], ignore_index=True).drop_duplicates(subset=key_cols)
+    # ✅ reset_index ensures no index collisions
+    df_unified = (
+        pd.concat([df_main.reset_index(drop=True), df_custom.reset_index(drop=True)], ignore_index=True)
+        .drop_duplicates(subset=key_cols)
+    )
 
     df_main.to_parquet(outdir / "main.parquet", index=False)
     df_custom.to_parquet(outdir / "custom.parquet", index=False)
