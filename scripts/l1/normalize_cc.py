@@ -17,7 +17,18 @@ def to_float(x):
     try: return float(s)
     except: return None
 
-def to_pct(x): return to_float(x)
+def to_pct(x):
+
+def to_bool_yes(x):
+    if x is None: return None
+    if isinstance(x, str):
+        t = x.strip().lower()
+        if t in {'y','yes','true','1'}: return True
+        if t in {'n','no','false','0'}: return False
+    if isinstance(x, (int,float)):
+        return bool(x)
+    return None
+ return to_float(x)
 
 def align_logical(df: pd.DataFrame, schema_key: str) -> pd.DataFrame:
     e = SCHEMAS.get(schema_key, {})
@@ -91,6 +102,17 @@ for c in ay_cols:
         df["__AY_src"] = df["__AY_src"].where(df["__AY_src"].notna(), c)
         df["__AY"]     = df["__AY"].where(df["__AY"].notna(), df[c].map(to_pct))
 
+
+# ---- Earnings flag (if provided by custom view) ----
+pe_candidates = [
+    'Option Expires Before Earnings',
+    'Option Expires Before Earnings?',
+]
+src = next((c for c in pe_candidates if c in df.columns), None)
+if src:
+    df['__pre_earnings'] = df[src].map(to_bool_yes)
+else:
+    df['__pre_earnings'] = None
 
 # ---- Drop helper merge columns and normalize headers before writing ----
 # Collapse Option Volume -> Volume (prefer existing 'Volume')
