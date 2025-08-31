@@ -7,12 +7,16 @@ ns = {}
 exec(compile(CAT.read_text(encoding="utf-8"), str(CAT), "exec"), ns, ns)
 SCHEMAS = dict(ns.get("SCHEMAS", {}))
 
-def build_position_aware_map(physical_cols):
+def build_position_aware_map(physical_cols: list[str]) -> dict[str, str]:
     out, ask_seen = {}, 0
     for c in physical_cols:
         if c == "Ask":
             ask_seen += 1
             out[c] = "Ask Price" if ask_seen == 1 else "Option Ask Price"
+        elif c == "Bid":
+            out[c] = "Bid Price"
+        elif c == "Last":
+            out[c] = "Option Last Price"
         elif c == "Volume":
             out[c] = "Option Volume"
         elif c == "%Chg~":
@@ -37,6 +41,8 @@ def build_position_aware_map(physical_cols):
             out[c] = "OTM Probability"
         elif c == "Total OI":
             out[c] = "Total Options Open Interest"
+        elif c == "Short Term~":
+            out[c] = "Short Term Opinion Signal"
         else:
             out[c] = c
     return out
