@@ -105,8 +105,7 @@ def main():
     ap.add_argument("--in-custom", required=True)
     ap.add_argument("--outdir", required=True)
     ap.add_argument("--top", type=int, default=10)
-ap.add_argument("--exclude-pre-earnings", action="store_true", default=True)
-args = ap.parse_args()
+    args = ap.parse_args()
 
     outdir = Path(args.outdir); outdir.mkdir(parents=True, exist_ok=True)
 
