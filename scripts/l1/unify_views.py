@@ -2,7 +2,6 @@
 import argparse, json
 from pathlib import Path
 import pandas as pd
-
 from catalog.schemas import SCHEMAS
 
 def load_and_align(path, screener, view):
@@ -13,7 +12,13 @@ def load_and_align(path, screener, view):
         raise ValueError(f"schema not found: {schema_key}")
     header_map = schema.get("header_map", {})
     df = df.rename(columns=header_map)
-    df = df[[c for c in schema.get("logical_columns", schema["columns"]) if c in df.columns]]
+
+    # enforce unique column names (important for concat)
+    df.columns = pd.io.parsers.base_parser.ParserBase({'names':df.columns})._maybe_dedup_names(df.columns)
+
+    # only keep logical columns if defined
+    keep = schema.get("logical_columns", schema["columns"])
+    df = df[[c for c in keep if c in df.columns]]
     return df
 
 def main():
@@ -35,7 +40,6 @@ def main():
 
     df_unified = pd.concat([df_main, df_custom], ignore_index=True).drop_duplicates(subset=key_cols)
 
-    # ✅ direct parquet writes
     df_main.to_parquet(outdir / "main.parquet", index=False)
     df_custom.to_parquet(outdir / "custom.parquet", index=False)
     df_unified.to_parquet(outdir / "unified.parquet", index=False)
