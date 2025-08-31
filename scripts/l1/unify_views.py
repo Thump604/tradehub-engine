@@ -4,6 +4,19 @@ from pathlib import Path
 import pandas as pd
 from catalog.schemas import SCHEMAS
 
+def dedup_columns(cols):
+    """Ensure column names are unique by appending suffixes .1, .2, etc."""
+    seen = {}
+    out = []
+    for c in cols:
+        if c not in seen:
+            seen[c] = 0
+            out.append(c)
+        else:
+            seen[c] += 1
+            out.append(f"{c}.{seen[c]}")
+    return out
+
 def load_and_align(path, screener, view):
     df = pd.read_csv(path)
     schema_key = f"{screener}_{view}"
@@ -13,10 +26,9 @@ def load_and_align(path, screener, view):
     header_map = schema.get("header_map", {})
     df = df.rename(columns=header_map)
 
-    # enforce unique column names (important for concat)
-    df.columns = pd.io.parsers.base_parser.ParserBase({'names':df.columns})._maybe_dedup_names(df.columns)
+    # ✅ enforce unique names safely
+    df.columns = dedup_columns(df.columns)
 
-    # only keep logical columns if defined
     keep = schema.get("logical_columns", schema["columns"])
     df = df[[c for c in keep if c in df.columns]]
     return df
