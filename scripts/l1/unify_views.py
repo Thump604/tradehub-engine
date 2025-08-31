@@ -1,53 +1,44 @@
 #!/usr/bin/env python3
-import argparse, pathlib, pandas as pd, sys, json
-from catalog import schemas
+import argparse, json
+from pathlib import Path
+import pandas as pd
 
-def load_csv(path, header_map=None):
+from catalog.schemas import SCHEMAS
+
+def load_and_align(path, screener, view):
     df = pd.read_csv(path)
-    if header_map:
-        # map physical -> logical names
-        rename_map = {k: v for k, v in header_map.items() if k in df.columns}
-        df = df.rename(columns=rename_map)
+    schema_key = f"{screener}_{view}"
+    schema = SCHEMAS.get(schema_key)
+    if not schema:
+        raise ValueError(f"schema not found: {schema_key}")
+    header_map = schema.get("header_map", {})
+    df = df.rename(columns=header_map)
+    df = df[[c for c in schema.get("logical_columns", schema["columns"]) if c in df.columns]]
     return df
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--screener", required=True)
-    ap.add_argument("--outdir", required=True)
-    ap.add_argument("main_file")
-    ap.add_argument("custom_file")
+    ap.add_argument("--outdir", required=True, type=Path)
+    ap.add_argument("main_csv")
+    ap.add_argument("custom_csv")
     args = ap.parse_args()
 
-    screener_main = f"{args.screener}_main"
-    screener_custom = f"{args.screener}_custom"
-
-    if screener_main not in schemas.SCHEMAS or screener_custom not in schemas.SCHEMAS:
-        sys.exit(f"schema not found for {args.screener}")
-
-    outdir = pathlib.Path(args.outdir)
+    outdir = args.outdir
     outdir.mkdir(parents=True, exist_ok=True)
 
-    # load
-    main_map   = schemas.SCHEMAS[screener_main].get("header_map")
-    custom_map = schemas.SCHEMAS[screener_custom].get("header_map")
+    df_main   = load_and_align(args.main_csv, args.screener, "main")
+    df_custom = load_and_align(args.custom_csv, args.screener, "custom")
 
-    df_main   = load_csv(args.main_file,   main_map)
-    df_custom = load_csv(args.custom_file, custom_map)
-
-    # align on logical columns intersection
-    common_cols = [c for c in df_main.columns if c in df_custom.columns]
-    df_main   = df_main[common_cols]
-    df_custom = df_custom[common_cols]
-
-    # composite key for joining
+    common_cols = list(set(df_main.columns) & set(df_custom.columns))
     key_cols = [c for c in ["symbol","Expiration Date","DTE","Strike Price"] if c in common_cols]
 
     df_unified = pd.concat([df_main, df_custom], ignore_index=True).drop_duplicates(subset=key_cols)
 
-    # write parquet
-    (outdir / "main.parquet").write_bytes(df_main.to_parquet(index=False))
-    (outdir / "custom.parquet").write_bytes(df_custom.to_parquet(index=False))
-    (outdir / "unified.parquet").write_bytes(df_unified.to_parquet(index=False))
+    # ✅ direct parquet writes
+    df_main.to_parquet(outdir / "main.parquet", index=False)
+    df_custom.to_parquet(outdir / "custom.parquet", index=False)
+    df_unified.to_parquet(outdir / "unified.parquet", index=False)
 
     print(json.dumps({
         "outdir": str(outdir),
