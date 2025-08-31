@@ -41,4 +41,6 @@ def main():
     all_schemas[args.screener] = entry
     write_schemas(out_path, all_schemas)
     print(f"[schemas] updated {out_path} -> {args.screener} (cols={len(columns)}, rows={row_count}, footer={'yes' if footer_ts else 'no'})")
+    import json
+    print(json.dumps({args.screener: entry}, indent=2))
 if __name__ == "__main__": main()
